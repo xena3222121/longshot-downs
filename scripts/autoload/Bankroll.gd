@@ -1,0 +1,70 @@
+extends Node
+
+## Autoload singleton (registered in project.godot) — the player's fake-money
+## balance, persisted to disk so it survives app restarts. Deliberately no
+## class_name: autoloads are referenced by their registered global name, and
+## giving this one a matching class_name risks a duplicate-identifier
+## collision with that.
+
+signal balance_changed(new_balance: int)
+
+const STARTING_BALANCE: int = 1000000
+const SAVE_PATH: String = "user://bankroll.save"
+
+## Floor the player can never stay below going into a new bet — a busted
+## player always has enough to keep playing instead of getting stuck at $0.
+const MIN_BALANCE: int = 100
+
+var balance: int = STARTING_BALANCE
+
+## Dev tools (see scripts/tools/) that drive Bankroll through hundreds of
+## fake trials set this false first, so their throwaway wins/losses never
+## overwrite the player's real save file on disk.
+var autosave_enabled: bool = true
+
+func _ready() -> void:
+	_load()
+	ensure_minimum()
+
+## Called at the start of every new race setup (see Main.gd) so a player who
+## just lost their last few dollars is topped back up before betting again,
+## not just once at game launch.
+func ensure_minimum() -> void:
+	if balance < MIN_BALANCE:
+		balance = MIN_BALANCE
+		balance_changed.emit(balance)
+		_save()
+
+func can_afford(amount: int) -> bool:
+	return amount > 0 and amount <= balance
+
+func place_bet(amount: int) -> bool:
+	if not can_afford(amount):
+		return false
+	balance -= amount
+	balance_changed.emit(balance)
+	_save()
+	return true
+
+func pay(amount: int) -> void:
+	balance += amount
+	balance_changed.emit(balance)
+	_save()
+
+func _load() -> void:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return
+	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if file == null:
+		return
+	var data: Variant = JSON.parse_string(file.get_as_text())
+	if typeof(data) == TYPE_DICTIONARY and data.has("balance"):
+		balance = int(data["balance"])
+
+func _save() -> void:
+	if not autosave_enabled:
+		return
+	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify({"balance": balance}))
