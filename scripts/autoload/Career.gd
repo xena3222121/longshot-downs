@@ -11,7 +11,8 @@ extends Node
 
 signal achievement_unlocked(id: String)
 
-const SAVE_PATH: String = "user://career.save"
+## Resolved once in _ready() — see SavePaths.gd for why this can't be a const.
+var SAVE_PATH: String
 
 ## Gated purely by races RUN (not bankroll, which swings wildly on its own
 ## from betting) so a losing streak never locks a player out of career
@@ -58,6 +59,7 @@ var peak_bankroll: int = 0
 var achievements_unlocked: Dictionary = {}
 
 func _ready() -> void:
+	SAVE_PATH = SavePaths.resolve("career.save")
 	_load()
 
 func get_current_class() -> Dictionary:

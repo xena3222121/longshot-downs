@@ -9,7 +9,10 @@ extends Node
 signal balance_changed(new_balance: int)
 
 const STARTING_BALANCE: int = 1000000
-const SAVE_PATH: String = "user://bankroll.save"
+
+## Resolved once in _ready() (SavePaths reads OS.get_environment, which isn't
+## a compile-time constant) rather than being a const.
+var SAVE_PATH: String
 
 ## Floor the player can never stay below going into a new bet — a busted
 ## player always has enough to keep playing instead of getting stuck at $0.
@@ -23,6 +26,7 @@ var balance: int = STARTING_BALANCE
 var autosave_enabled: bool = true
 
 func _ready() -> void:
+	SAVE_PATH = SavePaths.resolve("bankroll.save")
 	_load()
 	ensure_minimum()
 
