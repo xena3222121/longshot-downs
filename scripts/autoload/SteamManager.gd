@@ -20,6 +20,14 @@ signal leaderboard_score_uploaded(leaderboard_name: String, success: bool)
 ## once Steamworks registration is done.
 const DEV_APP_ID: int = 480
 
+## Initializing under DEV_APP_ID makes the Steam client broadcast "Playing
+## Spacewar" to the whole friends list on every single dev/playtest launch —
+## annoying for anyone who has the tester on their friends list. Steam
+## achievement/leaderboard calls are only exercised deliberately (see
+## SteamManager.gd's header), so default this off; flip it to true locally
+## (or set env var LONGSHOT_ENABLE_STEAM=1) only when actually testing those.
+const ENABLE_STEAM_DEV_INIT: bool = false
+
 ## Both leaderboards must already exist on this game's Steamworks partner
 ## site (one-time setup, same as registering achievement ids) — nothing
 ## running inside the game can create them.
@@ -34,6 +42,8 @@ var _pending_scores: Dictionary = {}
 
 func _ready() -> void:
 	if not Engine.has_singleton("Steam"):
+		return
+	if not (ENABLE_STEAM_DEV_INIT or OS.get_environment("LONGSHOT_ENABLE_STEAM") == "1"):
 		return
 
 	var steam: Object = Engine.get_singleton("Steam")
