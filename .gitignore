@@ -9,3 +9,7 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+# Exported standalone builds -- large binaries, published as GitHub Release
+# assets instead of committed to the repo.
+builds/

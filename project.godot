@@ -13,6 +13,7 @@ config_version=5
 config/name="Longshot Downs"
 run/main_scene="res://scenes/TitleScreen.tscn"
 config/features=PackedStringArray("4.4", "Forward Plus")
+config/icon="res://icon.png"
 
 [autoload]
 
