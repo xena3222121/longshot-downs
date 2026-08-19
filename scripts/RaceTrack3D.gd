@@ -95,16 +95,43 @@ var _was_big_surging: Array[bool] = []
 var _theme: Dictionary = {}
 var _venue_id: String = "" # "" = no venue set, single-race mode — falls back to Settings.track_theme_id exactly like before Venues existed
 
-func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, venue_id: String = "") -> void:
+## With several venues racing simultaneously on separate TrackLobby screens,
+## only ONE of them should ever actually be heard (TTS/ambience/gate SFX) —
+## otherwise every screen's announcer/crowd/bell talks over the others at
+## once. Defaults true so single-race/dev-tool usage (no TrackLobby involved)
+## is unaffected; TrackLobby passes this explicitly per screen and can flip it
+## live via set_audio_focus as the player switches which screen they're
+## listening to.
+var has_audio_focus: bool = true
+
+func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, venue_id: String = "", p_has_audio_focus: bool = true) -> void:
 	field = p_field
 	result = p_result
 	_bet_context = bet_context
 	_venue_id = venue_id
+	has_audio_focus = p_has_audio_focus
 	if venue_id != "":
 		var venue: Dictionary = Venues.get_venue(venue_id)
 		STRAIGHT_LEN = float(venue.get("straight_len", 140.0))
 		INNER_RADIUS = float(venue.get("inner_radius", 26.0))
 	_build_scene()
+
+## Called live by TrackLobby when the player switches which screen they're
+## listening to — immediately silences/resumes this screen's continuous
+## ambience bed rather than waiting for the next race to pick up the change.
+## One-shot cues (gate bell, replay whoosh) just check has_audio_focus at the
+## moment they'd fire, no special handling needed here.
+func set_audio_focus(focused: bool) -> void:
+	if focused == has_audio_focus:
+		return
+	has_audio_focus = focused
+	if announcer_director != null:
+		announcer_director.has_audio_focus = focused
+	if focused:
+		if playing:
+			AudioManager.start_race_ambience()
+	else:
+		AudioManager.stop_race_ambience()
 
 ## Pulls every color/light value this track's visuals depend on from either
 ## the active venue's own fixed theme (see Venues.gd — a real venue always
@@ -167,6 +194,7 @@ func _build_scene() -> void:
 
 	announcer_director = RaceAnnouncerDirector.new()
 	announcer_director.setup(field, broadcast_hud)
+	announcer_director.has_audio_focus = has_audio_focus
 
 	_was_big_surging.resize(field.size())
 	_was_big_surging.fill(false)
@@ -364,8 +392,9 @@ func _build_camera() -> void:
 ## ticking frames, instead of firing them the instant the track is built.
 func play_with_post_time() -> void:
 	await broadcast_hud.play_post_time_sequence()
-	AudioManager.play_sfx("race_start_bell")
-	AudioManager.play_sfx("horse_neigh")
+	if has_audio_focus:
+		AudioManager.play_sfx("race_start_bell")
+		AudioManager.play_sfx("horse_neigh")
 	InputHints.rumble(0.3, 0.55, 0.3) # gate-open thump, felt not just heard on a connected controller
 	announcer_director.race_start()
 	play()
@@ -374,7 +403,8 @@ func play() -> void:
 	frame_index = 0
 	playback_time = 0.0
 	playing = true
-	AudioManager.start_race_ambience()
+	if has_audio_focus:
+		AudioManager.start_race_ambience()
 
 func _process(delta: float) -> void:
 	if not playing or result == null or result.frames.is_empty():
@@ -406,7 +436,8 @@ func _process(delta: float) -> void:
 
 	if frame_index >= max_index:
 		playing = false
-		AudioManager.stop_race_ambience()
+		if has_audio_focus:
+			AudioManager.stop_race_ambience()
 		announcer_director.on_finish(result)
 		InputHints.clear_context_hints() # the podium overlay's own buttons take over Select/Back next; camera hints no longer apply
 		playback_finished.emit()
@@ -434,7 +465,8 @@ func play_replay() -> void:
 
 	if broadcast_hud != null:
 		broadcast_hud.show_commentary("REPLAY")
-	AudioManager.play_sfx("whoosh")
+	if has_audio_focus:
+		AudioManager.play_sfx("whoosh")
 
 	var max_index: int = result.frames.size() - 1
 	var start_index: int = max(0, max_index - REPLAY_TICKS_BACK)

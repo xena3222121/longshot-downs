@@ -34,6 +34,8 @@ var _screen_overlay_labels: Dictionary = {} # screen -> Label
 var _screen_continue_buttons: Dictionary = {} # screen -> Button, only visible while _screen_pending_result has that screen
 var _screen_pending_result: Dictionary = {} # screen -> result description String, set by _show_compact_result until its Continue button is pressed
 var _active_race_tracks: Dictionary = {} # screen -> RaceTrack3D
+var _screen_audio_buttons: Dictionary = {} # screen -> Button
+var _audio_focus_screen: int = 0 # exactly one screen's audio is ever live at once — see RaceTrack3D.has_audio_focus
 
 var _balance_label: Label
 var _toast_label: Label
@@ -52,7 +54,29 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	_refresh_sidebar()
 	_refresh_screens()
+	_refresh_audio_buttons()
 	_update_toast(_delta)
+
+## Radio-style picker: switching focus immediately mutes the old screen's
+## ambience/announcer and unmutes the new one (see RaceTrack3D.set_audio_focus)
+## rather than waiting for either race to end — a live toggle, not a
+## next-race setting.
+func _set_audio_focus(screen: int) -> void:
+	if screen == _audio_focus_screen:
+		return
+	var old_track: RaceTrack3D = _active_race_tracks.get(_audio_focus_screen)
+	if old_track != null:
+		old_track.set_audio_focus(false)
+	_audio_focus_screen = screen
+	var new_track: RaceTrack3D = _active_race_tracks.get(screen)
+	if new_track != null:
+		new_track.set_audio_focus(true)
+	AudioManager.play_sfx("bet_click")
+
+func _refresh_audio_buttons() -> void:
+	for screen in range(RaceScheduler.SCREEN_COUNT):
+		var btn: Button = _screen_audio_buttons[screen]
+		btn.text = "🔊" if screen == _audio_focus_screen else "🔇"
 
 const SCREEN_GRID_COLUMNS: int = 2 # 4 screens -> 2x2 grid, not one cramped row
 
@@ -239,6 +263,13 @@ func _build_screen_tile(screen: int) -> Control:
 
 	var viewport := SubViewport.new()
 	viewport.size = Vector2i(800, 500) # overwritten immediately once laid out — stretch=true keeps it matched to the container's actual size
+	# Without this, every screen's SubViewport shares ONE World3D by default —
+	# all 4 screens' RaceTrack3D instances (track geometry, horses, lights,
+	# sky) would literally coexist at the same coordinates in a single shared
+	# 3D space instead of 4 independent scenes, which is exactly the
+	# "overlapping/same universe" look. own_world_3d gives each screen its own
+	# fully isolated 3D world.
+	viewport.own_world_3d = true
 	viewport_container.add_child(viewport)
 	_screen_viewports[screen] = viewport
 
@@ -261,6 +292,22 @@ func _build_screen_tile(screen: int) -> Control:
 	var overlay_box := VBoxContainer.new()
 	overlay_box.add_theme_constant_override("separation", 10)
 	overlay_margin.add_child(overlay_box)
+
+	# With up to SCREEN_COUNT races potentially live at once, only ONE screen's
+	# announcer/ambience/gate SFX should ever actually play (see
+	# RaceTrack3D.has_audio_focus) — this button is the player's radio-style
+	# picker for which one. Always on top of the live footage (not gated by
+	# the overlay, which only shows when idle) so it can be switched mid-race.
+	var audio_btn := Button.new()
+	audio_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	audio_btn.offset_left = -48.0
+	audio_btn.offset_top = 8.0
+	audio_btn.offset_right = -8.0
+	audio_btn.offset_bottom = 48.0
+	audio_btn.add_theme_font_size_override("font_size", 18)
+	audio_btn.pressed.connect(_set_audio_focus.bind(screen))
+	wrapper.add_child(audio_btn)
+	_screen_audio_buttons[screen] = audio_btn
 
 	var overlay_label := Label.new()
 	overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -322,7 +369,7 @@ func _on_race_ready(venue_id: String, screen: int, result: RaceResult, bet_conte
 		return
 	var race_track := RaceTrack3D.new()
 	viewport.add_child(race_track)
-	race_track.setup(RaceScheduler.get_field(venue_id), result, bet_context, venue_id)
+	race_track.setup(RaceScheduler.get_field(venue_id), result, bet_context, venue_id, screen == _audio_focus_screen)
 	race_track.playback_finished.connect(_on_playback_finished.bind(venue_id, screen, race_track, result, bet_context))
 	race_track.play_with_post_time()
 	_active_race_tracks[screen] = race_track

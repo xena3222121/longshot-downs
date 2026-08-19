@@ -99,6 +99,13 @@ var _announced_turn: bool = false
 var _announced_stretch: bool = false
 var _announced_duel: bool = false
 
+## Live-toggleable by RaceTrack3D/TrackLobby (not just set once in setup) —
+## with several venues racing at once on separate screens, only the one
+## screen the player has audio focus on should ever actually speak/play a
+## crowd cue; the others still narrate their own on-screen caption via _say's
+## hud.show_commentary call below, just silently.
+var has_audio_focus: bool = true
+
 func setup(p_field: Array[Horse], p_hud: BroadcastHUD) -> void:
 	_field = p_field
 	_hud = p_hud
@@ -164,7 +171,8 @@ func _update_duel_call(order: Array[int], fractions: PackedFloat32Array) -> void
 	if fractions[order[0]] - fractions[order[1]] <= DUEL_GAP_FRACTION:
 		_announced_duel = true
 		_say(DUEL_CALLS.pick_random(), false, true)
-		AudioManager.play_crowd_reaction(0.7)
+		if has_audio_focus:
+			AudioManager.play_crowd_reaction(0.7)
 
 ## Fired by RaceTrack3D the moment a horse's surge crosses BIG_SURGE_THRESHOLD
 ## (same edge-trigger RaceTrack3D already uses for the camera punch) — shares
@@ -207,6 +215,7 @@ func _say(text: String, force: bool = false, excited: bool = false) -> void:
 		return
 	_line_gap = MIN_LINE_GAP
 	_filler_timer = 0.0
-	Announcer.say(text, excited)
+	if has_audio_focus:
+		Announcer.say(text, excited)
 	if _hud != null:
 		_hud.show_commentary(text)
