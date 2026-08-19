@@ -100,40 +100,42 @@ func _build_layout() -> void:
 
 	_build_toast()
 
-## Condensed on purpose — 10 venues need to fit without eating into the
-## screens area, which is the actual point of this whole layout (more room
-## for the grid means smaller tiles, not a wider sidebar).
+## Condensed on purpose — all 14 venues need to fit without a scrollbar or
+## eating into the screens area, which is the actual point of this whole
+## layout (more room for the grid means smaller tiles, not a wider sidebar).
 func _build_sidebar() -> Control:
 	var panel: PanelContainer = UITheme.make_glass_panel_container()
 	panel.custom_minimum_size = Vector2(250.0, 0.0)
 
-	var margin := MarginContainer.new()
-	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_%s" % side, 10)
-	panel.add_child(margin)
-
+	# No extra MarginContainer here -- PanelContainer's own themed "panel"
+	# stylebox already applies real content margins (18px/10px), so wrapping
+	# another margin around it just doubles the padding for no visual gain.
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 5)
-	margin.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 3)
+	panel.add_child(vbox)
 
 	_balance_label = Label.new()
 	_balance_label.theme_type_variation = "HeadingLabel"
-	_balance_label.add_theme_font_size_override("font_size", 16)
+	_balance_label.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(_balance_label)
 	_update_balance_label()
 
 	var title := Label.new()
 	title.theme_type_variation = "EyebrowLabel"
-	title.add_theme_font_size_override("font_size", 11)
+	title.add_theme_font_size_override("font_size", 10)
 	title.text = "SIMULCAST — %d SCREENS" % RaceScheduler.SCREEN_COUNT
 	vbox.add_child(title)
 
+	# ScrollContainer stays as a safety net if the window is ever resized
+	# smaller than the design resolution -- but at the normal window size the
+	# condensed row height below means all 14 venues fit without it ever
+	# actually needing to scroll.
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(scroll)
 
 	var rows_box := VBoxContainer.new()
-	rows_box.add_theme_constant_override("separation", 4)
+	rows_box.add_theme_constant_override("separation", 2)
 	rows_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(rows_box)
 
@@ -153,20 +155,67 @@ func _build_sidebar() -> Control:
 
 	return panel
 
-## One tight line per venue: name+countdown on the left, screen digits +
-## Bet packed on the right. Screen buttons are just the digit ("1"/"2"/...),
-## not "Screen 1" — with 4 of them plus a Bet button, the old full-word
-## labels didn't fit at this width at all.
+## The shared theme's default Button stylebox bakes in 18px/10px content
+## margins (same formula as PanelContainer's — see UITheme._panel_style)
+## meant for normal-sized buttons elsewhere in the game. That silently
+## overrides a small button's custom_minimum_size (the button grows to fit
+## text+padding regardless), which is why the tiny screen-digit/Bet buttons
+## rendered much taller than requested. Buttons (unlike
+## UITheme.make_glass_panel_container's shader-based panels) have no
+## material conflict, so overriding their per-state styleboxes directly here
+## is safe.
+func _apply_tight_button_style(btn: Button, h_margin: float, v_margin: float) -> void:
+	var normal := _tight_stylebox(UITheme.COLOR_PANEL, UITheme.COLOR_GOLD, 1, h_margin, v_margin)
+	var hover := _tight_stylebox(UITheme.COLOR_PANEL_LIGHT, UITheme.COLOR_GOLD_BRIGHT, 1, h_margin, v_margin)
+	var pressed := _tight_stylebox(UITheme.COLOR_PANEL_LIGHT.darkened(0.25), UITheme.COLOR_GOLD, 1, h_margin, v_margin)
+	var disabled := _tight_stylebox(UITheme.COLOR_PANEL.darkened(0.4), UITheme.COLOR_GOLD.darkened(0.5), 1, h_margin, v_margin)
+	var focus := _tight_stylebox(Color(0.0, 0.0, 0.0, 0.0), UITheme.COLOR_GOLD_BRIGHT, 1, h_margin, v_margin)
+	btn.add_theme_stylebox_override("normal", normal)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", pressed)
+	btn.add_theme_stylebox_override("disabled", disabled)
+	btn.add_theme_stylebox_override("focus", focus)
+
+func _tight_stylebox(fill: Color, border: Color, border_width: int, h_margin: float, v_margin: float) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = fill
+	sb.border_color = border
+	sb.set_border_width_all(border_width)
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = h_margin
+	sb.content_margin_right = h_margin
+	sb.content_margin_top = v_margin
+	sb.content_margin_bottom = v_margin
+	return sb
+
+## Two tight lines per venue (name+countdown+bet-chip, then screen digits +
+## Bet) instead of three — with 14 venues now (up from the original 10) a
+## third line per row was the difference between fitting on one screen and
+## needing a scrollbar. Screen buttons are just the digit ("1"/"2"/...), not
+## "Screen 1" — with 4 of them plus a Bet button, full-word labels don't fit
+## at this width at all.
 func _build_venue_row(venue_id: String) -> PanelContainer:
-	var row_panel: PanelContainer = UITheme.make_glass_panel_container(8.0, Color(0.043, 0.067, 0.106, 0.6))
-	var row_margin := MarginContainer.new()
-	for side in ["left", "right", "top", "bottom"]:
-		row_margin.add_theme_constant_override("margin_%s" % side, 6)
-	row_panel.add_child(row_margin)
+	# Plain flat stylebox, not UITheme.make_glass_panel_container -- that
+	# helper's shader material explicitly can't be combined with a custom
+	# "panel" stylebox override (see its own doc comment), and its glass-blur
+	# look is only worth the theme's default 18px/10px content margins for a
+	# single hero panel, not repeated 14 times over in a tight list. A plain
+	# StyleBoxFlat gives full control over padding so 14 rows actually fit.
+	var row_panel := PanelContainer.new()
+	var row_style := StyleBoxFlat.new()
+	row_style.bg_color = Color(0.043, 0.067, 0.106, 0.6)
+	row_style.border_color = UITheme.COLOR_GOLD
+	row_style.set_border_width_all(1)
+	row_style.set_corner_radius_all(6)
+	row_style.content_margin_left = 6.0
+	row_style.content_margin_right = 6.0
+	row_style.content_margin_top = 3.0
+	row_style.content_margin_bottom = 3.0
+	row_panel.add_theme_stylebox_override("panel", row_style)
 
 	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 2)
-	row_margin.add_child(vbox)
+	vbox.add_theme_constant_override("separation", 1)
+	row_panel.add_child(vbox)
 
 	var top_row := HBoxContainer.new()
 	top_row.add_theme_constant_override("separation", 4)
@@ -174,44 +223,49 @@ func _build_venue_row(venue_id: String) -> PanelContainer:
 
 	var name_label := Label.new()
 	name_label.text = Venues.label_for(venue_id)
-	name_label.add_theme_font_size_override("font_size", 13)
+	name_label.add_theme_font_size_override("font_size", 12)
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_label.clip_text = true
 	top_row.add_child(name_label)
 
 	var bet_chip := Label.new()
-	bet_chip.add_theme_font_size_override("font_size", 10)
+	bet_chip.add_theme_font_size_override("font_size", 9)
 	bet_chip.add_theme_color_override("font_color", Color(0.3, 0.9, 0.3))
 	top_row.add_child(bet_chip)
 	_row_bet_chips[venue_id] = bet_chip
 
 	var countdown_label := Label.new()
-	countdown_label.add_theme_font_size_override("font_size", 12)
+	countdown_label.add_theme_font_size_override("font_size", 10)
 	countdown_label.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
-	vbox.add_child(countdown_label)
+	countdown_label.custom_minimum_size = Vector2(58.0, 0.0)
+	countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	top_row.add_child(countdown_label)
 	_row_countdown_labels[venue_id] = countdown_label
 
 	var actions := HBoxContainer.new()
-	actions.add_theme_constant_override("separation", 3)
+	actions.add_theme_constant_override("separation", 2)
 	vbox.add_child(actions)
 
 	var screen_buttons: Array[Button] = []
 	for screen in range(RaceScheduler.SCREEN_COUNT):
 		var screen_btn := Button.new()
 		screen_btn.text = str(screen + 1)
-		screen_btn.custom_minimum_size = Vector2(26.0, 0.0)
-		screen_btn.add_theme_font_size_override("font_size", 12)
+		screen_btn.custom_minimum_size = Vector2(18.0, 18.0)
+		screen_btn.add_theme_font_size_override("font_size", 9)
 		screen_btn.toggle_mode = true
 		screen_btn.pressed.connect(_on_screen_toggle_pressed.bind(venue_id, screen, screen_btn))
+		_apply_tight_button_style(screen_btn, 2.0, 1.0)
 		actions.add_child(screen_btn)
 		screen_buttons.append(screen_btn)
 	_row_screen_buttons[venue_id] = screen_buttons
 
 	var bet_btn := Button.new()
 	bet_btn.text = "Bet"
-	bet_btn.add_theme_font_size_override("font_size", 12)
+	bet_btn.custom_minimum_size = Vector2(0.0, 18.0)
+	bet_btn.add_theme_font_size_override("font_size", 10)
 	bet_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bet_btn.pressed.connect(_on_bet_pressed.bind(venue_id))
+	_apply_tight_button_style(bet_btn, 4.0, 1.0)
 	actions.add_child(bet_btn)
 
 	return row_panel
