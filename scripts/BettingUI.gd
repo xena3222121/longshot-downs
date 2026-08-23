@@ -49,6 +49,27 @@ var status_label: Label
 var vbox: VBoxContainer
 var second_race_box: VBoxContainer
 
+## Odds keep drifting live in RaceScheduler._drift_odds while this screen
+## sits open waiting for post time, but _refresh_horse_labels was previously
+## only ever called from _build()/_on_horse_selected — meaning a player just
+## watching the board would never actually see a number move until they
+## clicked something. Polling on a short interval (not every frame — these
+## are just label redraws, no need to touch them 60x/sec) makes the "live
+## betting public" odds drift actually visible while waiting to bet.
+const ODDS_REFRESH_INTERVAL: float = 1.0
+var _odds_refresh_timer: float = 0.0
+
+func _process(delta: float) -> void:
+	if tiers.is_empty() or not is_visible_in_tree():
+		return
+	_odds_refresh_timer += delta
+	if _odds_refresh_timer < ODDS_REFRESH_INTERVAL:
+		return
+	_odds_refresh_timer = 0.0
+	_refresh_horse_labels()
+	if bet_type == OddsTable.BetType.DAILY_DOUBLE and not second_tiers.is_empty():
+		_refresh_second_horse_labels()
+
 func setup(p_field: Array[Horse], p_tiers: Array[Dictionary]) -> void:
 	field = p_field
 	tiers = p_tiers
@@ -181,7 +202,9 @@ func _build() -> void:
 	amount_row.add_child(amount_option)
 
 	race_button = Button.new()
-	race_button.text = "Place Bet & Race!"
+	race_button.text = "PLACE BET & RACE!"
+	race_button.theme_type_variation = "PrimaryButton"
+	race_button.custom_minimum_size = Vector2(0.0, 56.0)
 	race_button.pressed.connect(_on_race_pressed)
 	vbox.add_child(race_button)
 	UITheme.add_button_juice(race_button)

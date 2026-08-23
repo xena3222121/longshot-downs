@@ -63,6 +63,13 @@ theme — credited anyway for completeness/provenance, same as everything else b
 - **License:** CC0 1.0 (Public Domain) — no attribution required.
 - **Usage:** was played on a horse's big mid-race surge alongside the camera punch/speed lines/particle trail, part of the "arcade excess" pass — removed per AJ's feedback ("lose the swoosh noise thing"), the camera punch/speed-line/particle-trail effects still fire on their own. Kept in case a future pass wants a whoosh sound back.
 
+## post_time_bugle.mp3
+- **Track:** "G39-16-Bugle Call.wav" — a bugle playing the classic cavalry-charge call, twice, from the same digitized vintage Hollywood optical/mag sound effects collection as horse_neigh.mp3/hoofbeats_loop.mp3
+- **Source:** https://freesound.org/people/craigsmith/sounds/438633/ (direct file: https://cdn.freesound.org/previews/438/438633_2524442-hq.mp3)
+- **Author:** craigsmith (freesound.org)
+- **License:** CC0 1.0 (Public Domain) — no attribution required.
+- **Usage:** AJ: "its definitely missing the classic post time announcing horn blast" — this isn't the exact historic "First Call"/"Call to the Post" bugle tune specifically (a clean isolated CC0 recording of that exact melody wasn't found), but a real, high-quality vintage bugle recording rather than a synth fanfare, close enough in spirit to read as the classic pre-race horn. Played once, right as the post-time "riders up" beat begins (see RaceTrack3D.play_with_post_time) — well before the separate race_start_bell cue at the actual gate.
+
 ## crowd_cheer.mp3
 - **Track:** "Short Crowd Cheer" — a small crowd (~40 people) applauding at a concert
 - **Source:** https://freesound.org/people/qubodup/sounds/182571/ (direct file: https://cdn.freesound.org/previews/182/182571_71257-hq.mp3)

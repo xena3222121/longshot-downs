@@ -17,6 +17,14 @@ const UNWATCHED_VENUE: String = "barton_bay"
 
 func _ready() -> void:
 	Engine.time_scale = TIME_SCALE
+	# Was missing before — unlike finish_podium_check.gd, this never isolated
+	# itself from the REAL save file, so it silently depended on whatever the
+	# player's actual bankroll balance happened to be. Caught for real when
+	# AJ's own balance had dropped to Bankroll.MIN_BALANCE (100) from actually
+	## playing the game, which made the $1000 test bet below fail to place —
+	# nothing to do with actual game logic, just this test reading real state.
+	Bankroll.autosave_enabled = false
+	Bankroll.balance = 1000000
 	assert(RaceScheduler.screen_venue_ids[0] == SCREEN_VENUE, "test assumes screen 0's default assignment")
 	assert(RaceScheduler.screen_venue_ids[1] == "", "test assumes screen 1 starts unassigned")
 
@@ -76,4 +84,69 @@ func _ready() -> void:
 	assert(RaceScheduler.get_countdown(SCREEN_VENUE) > RaceScheduler.POST_INTERVAL - 1.0, "finish_watched_race should reset the countdown to a fresh POST_INTERVAL")
 
 	print("scheduler_check: full cycle (two simultaneous screen handoffs + unwatched background resolution) completed with no runtime errors after %d real frames" % frame_count)
+
+	await _check_join_in_progress()
 	get_tree().quit()
+
+## New behavior, AJ: "make it start anyways, if im not watching it it still
+## runs and remains live until the race is over, if i choose to tune in
+## itll open at whatever part of the race its at." Exercises the part none
+## of the checks above touch: a venue with NO screen assigned actually racing
+## (not instantly resolved), get_live_race() reporting it mid-flight, and a
+## real RaceTrack3D.join_in_progress() seek actually running without error —
+## the same primitives TrackLobby._on_screen_assignment_changed wires
+## together, just driven directly here since this scene has no TrackLobby.
+const JOIN_VENUE: String = "silverspring_downs" # unused by every check above — must stay unassigned the whole run for this to test the truly-unwatched path
+
+func _check_join_in_progress() -> void:
+	assert(RaceScheduler.screen_for(JOIN_VENUE) == -1, "test assumes this venue never got a screen assigned above")
+
+	# By the time this runs, JOIN_VENUE's own independent countdown has
+	# already been ticking through every frame of the ~80 real frames the
+	# checks above took — at TIME_SCALE=120 that's ~150+ sim-seconds, likely
+	# MORE than one full race+recycle for this venue already. So: first wait
+	# for a race boundary (not currently racing), THEN wait for the NEXT
+	# post time specifically, catching it right as elapsed starts from ~0 —
+	# otherwise this could catch an arbitrary, possibly near-finished point
+	# in whichever race happens to already be underway.
+	var frame_count: int = 0
+	var max_wait_frames: int = 1200
+	while RaceScheduler.is_racing(JOIN_VENUE) and frame_count < max_wait_frames:
+		await get_tree().process_frame
+		frame_count += 1
+	while not RaceScheduler.is_racing(JOIN_VENUE) and frame_count < max_wait_frames:
+		await get_tree().process_frame
+		frame_count += 1
+	assert(RaceScheduler.is_racing(JOIN_VENUE), "join-in-progress venue should have gone to post and started racing unwatched by now")
+
+	# One or two frames so there's SOME real elapsed time to join partway
+	# into (joining at exactly elapsed=0 wouldn't exercise the seek at all)
+	# without risking the race already nearing its own natural finish.
+	for i in range(2):
+		await get_tree().process_frame
+
+	var live: Dictionary = RaceScheduler.get_live_race(JOIN_VENUE)
+	assert(not live.is_empty(), "get_live_race should report this venue as joinable while it's racing unwatched")
+	assert(live.elapsed > 0.0, "some real time should have elapsed since this race's post time")
+	assert(live.elapsed < live.result.duration, "test should have caught this mid-race, not after it already finished")
+
+	var race_track := RaceTrack3D.new()
+	add_child(race_track)
+	race_track.setup(RaceScheduler.get_field(JOIN_VENUE), live.result, live.bet_context, JOIN_VENUE, false, RaceScheduler.get_is_turf(JOIN_VENUE))
+	race_track.join_in_progress(live.elapsed)
+	assert(is_equal_approx(race_track.playback_time, live.elapsed), "join_in_progress should seed playback_time straight to the live elapsed offset, no ramp-up")
+
+	# Deliberately few frames, not 30+ — Engine.time_scale=120 means a handful
+	# of real frames can already be several sim-seconds; drive too many and
+	# an already-mid-race join can legitimately reach its own natural finish
+	# during the test (playing correctly flips false then, which isn't the
+	# thing being tested here). Just confirm it's actually ticking FORWARD
+	# from the seeded offset, not stuck or reset back to 0.
+	var seeded_time: float = race_track.playback_time
+	for i in range(3):
+		await get_tree().process_frame
+	assert(race_track.playing, "joined playback should still be running a few frames after the seek")
+	assert(race_track.playback_time > seeded_time, "playback_time should keep advancing forward from the seeded live-elapsed offset")
+	race_track.queue_free()
+
+	print("scheduler_check: join-in-progress (unwatched race seeked mid-flight) completed with no runtime errors")

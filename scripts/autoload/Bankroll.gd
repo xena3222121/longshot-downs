@@ -7,6 +7,12 @@ extends Node
 ## collision with that.
 
 signal balance_changed(new_balance: int)
+## Fired the instant balance actually hits 0 from a bet/payout mutation (NOT
+## from ensure_minimum, which is the fix for this, not the problem) — see
+## TrackLobby's connection to this for the "you suck at betting, try again?"
+## prompt. Bankroll itself only reports the state change; it doesn't own any
+## UI/dialog, same separation as balance_changed.
+signal went_broke
 
 const STARTING_BALANCE: int = 1000000
 
@@ -48,10 +54,23 @@ func place_bet(amount: int) -> bool:
 	balance -= amount
 	balance_changed.emit(balance)
 	_save()
+	if balance <= 0:
+		went_broke.emit()
 	return true
 
 func pay(amount: int) -> void:
 	balance += amount
+	balance_changed.emit(balance)
+	_save()
+	if balance <= 0:
+		went_broke.emit()
+
+## Sets the balance directly to `amount` (not an add-on-top like pay()) —
+## used by the "you suck at betting, try again?" prompt to top a busted
+## player back up to a fixed fresh-start amount regardless of exactly how
+## negative-adjacent their balance was.
+func refill(amount: int) -> void:
+	balance = amount
 	balance_changed.emit(balance)
 	_save()
 

@@ -10,13 +10,13 @@ extends RefCounted
 ## unavailable) and BroadcastHUD.show_commentary (on-screen caption) so the
 ## call is always visible even with TTS off or muted.
 
-const LEADER_CHANGE_COOLDOWN: float = 2.0
-const LEADER_HOLD_TIME: float = 0.45 # a lead has to stick for a beat before it's worth calling — real
+const LEADER_CHANGE_COOLDOWN: float = 0.7
+const LEADER_HOLD_TIME: float = 0.2 # a lead has to stick for a beat before it's worth calling — real
 	# broadcasters don't call every hair's-width position swap in a bunched pack
-const MOVE_COOLDOWN: float = 2.5
-const MIN_LINE_GAP: float = 1.1 # floor between ANY two lines regardless of source — tight enough to feel
-	# constant like a real track announcer, not so tight lines trip over each other
-const FILLER_INTERVAL: float = 5.0 # if nothing else has been said in this long, call the running order —
+const MOVE_COOLDOWN: float = 0.9
+const MIN_LINE_GAP: float = 0.45 # floor between ANY two lines regardless of source — a real track
+	# announcer is talking almost the entire race, not pausing between calls
+const FILLER_INTERVAL: float = 1.2 # if nothing else has been said in this long, call the running order —
 	# a real caller is never actually silent, even when nothing dramatic is happening
 
 const TURNING_FOR_HOME_FRACTION: float = 0.80
@@ -211,8 +211,18 @@ func _sorted_indices(fractions: PackedFloat32Array) -> Array[int]:
 	return order
 
 func _say(text: String, force: bool = false, excited: bool = false) -> void:
-	if not force and _line_gap > 0.0:
-		return
+	if not force:
+		if _line_gap > 0.0:
+			return
+		# Waits for the CURRENT clip to actually finish, not just MIN_LINE_GAP,
+		# before firing the next line — cranking the calling frequency up
+		# without this just meant every new line cut the previous one off
+		# mid-word every ~0.5s (talking constantly, but as noise). Only
+		# applies when this screen actually has audio focus; an unfocused
+		# background screen has no clip playing at all, so MIN_LINE_GAP alone
+		# still paces its captions.
+		if has_audio_focus and Announcer.is_speaking():
+			return
 	_line_gap = MIN_LINE_GAP
 	_filler_timer = 0.0
 	if has_audio_focus:

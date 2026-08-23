@@ -1,51 +1,45 @@
 extends Node
 
 ## Dev tool, not part of the game: racetrack_playback_check.gd only ever
-## exercises the default theme ("neon_downs") and default camera mode
-## ("broadcast") for a full race — this drives every TrackThemes.THEME_IDS x
-## RaceTrack3D.CAMERA_MODE_ORDER combination (including the overhead/jockey
-## camera math and each theme's _apply_theme wiring) through a few seconds of
-## real playback, then separately exercises the instant-replay path
-## end-to-end. Must run as a real scene (not via --script) for the
-## autoloads:
+## exercises the default theme ("neon_downs") for a full race — this drives
+## every TrackThemes.THEME_IDS entry (each theme's _apply_theme wiring)
+## through a few seconds of real playback on the single broadcast camera,
+## then separately exercises the instant-replay path end-to-end. Must run as
+## a real scene (not via --script) for the autoloads:
 ##   godot --headless --path . res://scenes/tools/theme_camera_check.tscn
 
 const TIME_SCALE: float = 20.0
-const FRAMES_PER_COMBO: int = 90
+const FRAMES_PER_THEME: int = 90
 
 func _ready() -> void:
 	Engine.time_scale = TIME_SCALE
 	Bankroll.autosave_enabled = false
 
 	for theme_id in TrackThemes.THEME_IDS:
-		for camera_mode in RaceTrack3D.CAMERA_MODE_ORDER:
-			Settings.track_theme_id = theme_id
-			Settings.camera_mode = camera_mode
+		Settings.track_theme_id = theme_id
 
-			var roster: Array[Horse] = HorseRoster.generate()
-			roster.shuffle()
-			var field: Array[Horse] = roster.slice(0, 8)
-			HorseRoster.assign_race_colors(field)
-			var tiers: Array[Dictionary] = OddsTable.assign_to_field(field.size())
-			var result: RaceResult = RaceSim.simulate(field, tiers)
+		var roster: Array[Horse] = HorseRoster.generate()
+		roster.shuffle()
+		var field: Array[Horse] = roster.slice(0, 8)
+		HorseRoster.assign_race_colors(field)
+		var tiers: Array[Dictionary] = OddsTable.assign_to_field(field.size())
+		var result: RaceResult = RaceSim.simulate(field, tiers)
 
-			var race_track := RaceTrack3D.new()
-			add_child(race_track)
-			race_track.setup(field, result)
-			race_track.play()
+		var race_track := RaceTrack3D.new()
+		add_child(race_track)
+		race_track.setup(field, result)
+		race_track.play()
 
-			for i in range(FRAMES_PER_COMBO):
-				await get_tree().process_frame
-
-			assert(race_track._camera_mode == camera_mode, "camera mode should read from Settings at build time")
-			print("theme_camera_check: theme=%s camera=%s ran %d frames with no runtime errors" % [theme_id, camera_mode, FRAMES_PER_COMBO])
-			race_track.queue_free()
+		for i in range(FRAMES_PER_THEME):
 			await get_tree().process_frame
+
+		print("theme_camera_check: theme=%s ran %d frames with no runtime errors" % [theme_id, FRAMES_PER_THEME])
+		race_track.queue_free()
+		await get_tree().process_frame
 
 	# Instant replay: drive one race all the way to playback_finished, then
 	# exercise play_replay() itself (the part no other dev tool touches).
 	Settings.track_theme_id = TrackThemes.DEFAULT_THEME_ID
-	Settings.camera_mode = "broadcast"
 	var roster2: Array[Horse] = HorseRoster.generate()
 	roster2.shuffle()
 	var field2: Array[Horse] = roster2.slice(0, 8)

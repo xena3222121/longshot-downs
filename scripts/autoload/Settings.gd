@@ -15,12 +15,15 @@ var music_volume: float = 1.0
 var sfx_volume: float = 1.0
 var fullscreen: bool = false
 
-## See TrackThemes.THEME_IDS / RaceTrack3D.CAMERA_MODE_ORDER for the valid
-## value sets. Camera mode also changes live mid-race (see RaceTrack3D's
-## cycle-camera input handling) and persists whichever mode was last used,
-## the same way it's set here at the start of a race.
+## See TrackThemes.THEME_IDS for the valid value set.
 var track_theme_id: String = TrackThemes.DEFAULT_THEME_ID
-var camera_mode: String = "broadcast"
+
+## How many of TrackLobby's simulcast screens are shown at once — 1 (one
+## screen filling the whole viewing area), 2, or RaceScheduler.SCREEN_COUNT
+## (the max, current 2x2 grid). Persisted the same as track_theme_id so the
+## player's preferred viewing layout survives between sessions rather than
+## always resetting to the full grid.
+var screen_display_count: int = 4
 
 func _ready() -> void:
 	_load()
@@ -50,8 +53,8 @@ func set_track_theme_id(id: String) -> void:
 	track_theme_id = id
 	_save()
 
-func set_camera_mode(mode: String) -> void:
-	camera_mode = mode
+func set_screen_display_count(count: int) -> void:
+	screen_display_count = count
 	_save()
 
 func _apply_all() -> void:
@@ -68,7 +71,7 @@ func _save() -> void:
 	cfg.set_value("audio", "sfx", sfx_volume)
 	cfg.set_value("display", "fullscreen", fullscreen)
 	cfg.set_value("race", "track_theme_id", track_theme_id)
-	cfg.set_value("race", "camera_mode", camera_mode)
+	cfg.set_value("race", "screen_display_count", screen_display_count)
 	cfg.save(SETTINGS_PATH)
 
 func _load() -> void:
@@ -80,4 +83,4 @@ func _load() -> void:
 	sfx_volume = cfg.get_value("audio", "sfx", 1.0)
 	fullscreen = cfg.get_value("display", "fullscreen", false)
 	track_theme_id = cfg.get_value("race", "track_theme_id", TrackThemes.DEFAULT_THEME_ID)
-	camera_mode = cfg.get_value("race", "camera_mode", "broadcast")
+	screen_display_count = cfg.get_value("race", "screen_display_count", 4)

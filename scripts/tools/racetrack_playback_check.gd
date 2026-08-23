@@ -15,9 +15,18 @@ extends Node
 ## of time_scale, so they don't shrink the real wait the way this does).
 ## Must run as a real scene (--path ., not --script) for autoloads:
 ##   godot --headless --path . res://scenes/tools/racetrack_playback_check.tscn
+##
+## Drives play_with_post_time() (what every real caller — Main.gd/
+## TrackLobby.gd — actually uses), not plain play(), so this also covers
+## BroadcastHUD.show_odds_board()/play_post_time_sequence() and the gate SFX/
+## announcer opening call. Those run on real SceneTree timers exactly like
+## the comment above describes — Engine.time_scale does NOT shrink them — so
+## this test now genuinely waits several real seconds before the race itself
+## starts ticking; MAX_FRAMES_HEADROOM below is sized with that in mind.
 
 const TIME_SCALE: float = 20.0
 const PROGRESS_EVERY_N_FRAMES: int = 60
+const MAX_FRAMES_HEADROOM: int = 1200 # covers play_with_post_time()'s real-timer odds-board+countdown wait, not just the scaled race itself
 
 func _ready() -> void:
 	Engine.time_scale = TIME_SCALE
@@ -32,7 +41,7 @@ func _ready() -> void:
 	var race_track := RaceTrack3D.new()
 	add_child(race_track)
 	race_track.setup(field, result)
-	race_track.play()
+	race_track.play_with_post_time() # not awaited — runs as a background coroutine; the frame loop below lets it (and the eventual race) play out
 
 	# A plain bool local wouldn't observe a write made inside the lambda below
 	# (GDScript closures capture locals by value, not by reference — same
@@ -43,7 +52,7 @@ func _ready() -> void:
 
 	# Real frames needed ~= (race duration / time_scale) * assumed_fps, with
 	# generous headroom — this is a safety cap on FRAME COUNT, not seconds.
-	var max_frames: int = int((result.duration / TIME_SCALE) * 60.0 * 5.0) + 300
+	var max_frames: int = int((result.duration / TIME_SCALE) * 60.0 * 5.0) + MAX_FRAMES_HEADROOM
 	var frame_count: int = 0
 	while not state.finished and frame_count < max_frames:
 		if frame_count % PROGRESS_EVERY_N_FRAMES == 0:

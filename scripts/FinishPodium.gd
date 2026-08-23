@@ -2,12 +2,19 @@ class_name FinishPodium
 extends Control
 
 ## Full-screen overlay shown after a race — deliberately over the top: a
-## big bouncy title card, 3rd place rises first, then 2nd, then 1st (each
-## with a squash-and-stretch landing bounce, biggest reveal held for last),
-## a multi-color confetti rain timed with the fanfare, then the bet outcome
-## and the complete finish order. Plays "finish_fanfare"/"win_jingle"/
+## big bouncy title card, then the winner's own name (in their silk colors)
+## and time snapping in with a screen flash/fanfare/confetti/crowd-cheer/
+## rumble all landing together as one punchy beat, then the bet outcome and
+## the complete finish order. Plays "finish_fanfare"/"win_jingle"/
 ## "lose_sting" through AudioManager if those assets exist yet; otherwise
 ## runs identically but silent.
+##
+## AJ, after seeing an actual screenshot of an earlier version of this that
+## put the top-3 finishers up on literal riser blocks with tiny 3D horses on
+## top: "ditch the podium who tf cares... just make the finish animation
+## better." That whole riser/diorama concept (PODIUM_COLORS/SLOT_PLACES/
+## _build_podium/_build_horse_diorama etc.) is gone — replaced by putting
+## the same effort into THIS reveal beat being tighter and punchier instead.
 ##
 ## `bet_context` carries everything needed to resolve (or defer resolving)
 ## the bet, since that varies by bet type:
@@ -23,20 +30,19 @@ extends Control
 signal race_again_pressed
 signal continue_to_next_race
 
-const PODIUM_COLORS: Array[Color] = [
-	Color(0.85, 0.68, 0.15), Color(0.75, 0.75, 0.78), Color(0.72, 0.45, 0.2),
-] # gold, silver, bronze — indexed by place (0-based)
-const PODIUM_HEIGHTS: Array[float] = [220.0, 160.0, 120.0] # indexed by place
-const SLOT_PLACES: Array[int] = [1, 0, 2] # left-to-right visual order: 2nd, 1st, 3rd
-const REVEAL_ORDER: Array[int] = [2, 1, 0] # bronze, silver, then gold last
-
-const BLOCK_WIDTH: float = 130.0
-const BLOCK_GAP: float = 24.0
 const CENTER_X: float = 800.0
-const BASELINE_Y: float = 480.0
-const RISE_DURATION: float = 0.45
-const REVEAL_STAGGER: float = 0.5
-const TITLE_LEAD_IN: float = 0.7
+## Leftover from the old podium-riser layout, where blocks up to 220px tall
+## sat ABOVE this line — never rechecked after the podium was removed. With
+## the window a fixed 900px tall, BASELINE_Y+40 (where the backdrop/payoff
+## cards start) plus the old 430px-tall backdrop overflowed the bottom of
+## the screen outright, cutting off horse #8's row before content even
+## factored in. Lowered to reclaim the now-empty gap between the winner
+## line (ends ~y=230) and here.
+const BASELINE_Y: float = 260.0
+const TITLE_LEAD_IN: float = 0.55
+const WINNER_HOLD: float = 0.6 # short beat after the winner-line/flash/fanfare lands before the payoff/outcome panels pop in — long enough to register, short enough to stay "tight"
+
+const OUTCOME_CHIP_SIZE: Vector2 = Vector2(340.0, 100.0) # see _build_outcome_chip
 
 const CONFETTI_COLORS: Array[Color] = [
 	Color(1.0, 0.2, 0.2), Color(0.2, 0.55, 1.0), Color(1.0, 0.85, 0.1),
@@ -51,8 +57,6 @@ const PHOTO_FINISH_MARGIN: float = 0.3
 const RUNAWAY_MARGIN: float = 3.0
 
 var result: RaceResult
-var _podium_rest_y: Dictionary = {} # place -> resting y position, for the reveal tween
-var _podium_blocks: Dictionary = {} # place -> the ColorRect, for the landing bounce
 
 func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary) -> void:
 	result = p_result
@@ -69,19 +73,21 @@ func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary)
 	_show_title_banner()
 	await get_tree().create_timer(TITLE_LEAD_IN).timeout
 
-	_build_podium()
-	_reveal_podium()
-
-	await get_tree().create_timer(REVEAL_STAGGER * REVEAL_ORDER.size() + RISE_DURATION).timeout
-	# Both cues fire in the same instant — each gets a -8dB cut so the combined
-	# result reads as one big moment instead of two full-volume sounds summing
-	# into a blaring spike.
+	_show_winner_line()
+	_flash_screen()
+	# All four land in the same instant — the actual "we have a winner"
+	# impact beat. finish_fanfare/crowd_cheer each get a -8dB cut so the
+	# combined result reads as one big moment instead of two full-volume
+	# sounds summing into a blaring spike.
 	AudioManager.play_sfx("finish_fanfare", -8.0)
 	AudioManager.play_sfx("crowd_cheer", -8.0)
 	InputHints.rumble(0.25, 0.6, 0.4)
 	_spawn_confetti()
 
+	await get_tree().create_timer(WINNER_HOLD).timeout
+
 	var unlocked: Array[String] = Career.record_finish(result)
+	_build_payoff_board()
 	if bet_context.is_empty():
 		# RaceScheduler's multi-screen viewing doesn't require a bet to watch
 		# a race — this is the "just watching, no bet riding on it" case, not
@@ -114,10 +120,16 @@ func _show_title_banner() -> void:
 	tween.tween_property(title, "scale", Vector2(1.25, 1.25), 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.tween_property(title, "scale", Vector2(1.0, 1.0), 0.2).set_trans(Tween.TRANS_SINE)
 
+	# AJ: the reveal looked "jumbled" — this used to loop 6x (6 real seconds),
+	# still visibly rocking back and forth long after the payout/payoff cards
+	# had already appeared below it. A serious dollar-amount card sharing the
+	# screen with a banner still lazily wobbling reads as messy, not festive.
+	# 2 loops settles it well before WINNER_HOLD (0.6s) elapses.
 	var wobble: Tween = create_tween()
-	wobble.set_loops(6)
+	wobble.set_loops(2)
 	wobble.tween_property(title, "rotation", deg_to_rad(-2.0), 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	wobble.tween_property(title, "rotation", deg_to_rad(2.0), 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	wobble.tween_property(title, "rotation", 0.0, 0.2).set_trans(Tween.TRANS_SINE) # settle dead level, not mid-wobble
 
 ## Reads the actual margin between 1st and 2nd rather than assuming — see
 ## PHOTO_FINISH_MARGIN/RUNAWAY_MARGIN above.
@@ -133,82 +145,64 @@ func _banner_text() -> String:
 		return "WINS GOING AWAY!"
 	return "WE HAVE A WINNER!"
 
-func _build_podium() -> void:
-	for slot in range(SLOT_PLACES.size()):
-		var place: int = SLOT_PLACES[slot]
-		var idx: int = result.finish_order[place]
-		var state: RaceHorseState = result.field[idx]
-		var height: float = PODIUM_HEIGHTS[place]
-		var slot_x: float = CENTER_X + (slot - 1) * (BLOCK_WIDTH + BLOCK_GAP) - BLOCK_WIDTH * 0.5
-		var rest_y: float = BASELINE_Y - height
-		_podium_rest_y[place] = rest_y
+## Winner's name (in their own silk_primary) + finish time, snapping in with
+## a punchy scale/overshoot right as the flash/fanfare/confetti/rumble all
+## land together (see setup()) — the actual "we have a winner" payoff beat,
+## now that there's no podium riser to reveal it via rise-and-bounce instead.
+func _show_winner_line() -> void:
+	if result.finish_order.is_empty():
+		return
+	var winner: RaceHorseState = result.field[result.finish_order[0]]
 
-		var unit := Control.new()
-		unit.position = Vector2(slot_x, BASELINE_Y + 60.0) # starts hidden below the baseline
-		unit.name = "podium_unit_%d" % place
-		add_child(unit)
+	var name_label := Label.new()
+	name_label.text = winner.horse.horse_name
+	name_label.theme_type_variation = "HeadingLabel"
+	name_label.add_theme_font_size_override("font_size", 40)
+	name_label.add_theme_color_override("font_color", winner.horse.silk_primary)
+	name_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+	name_label.add_theme_constant_override("outline_size", 6)
+	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_label.custom_minimum_size = Vector2(600.0, 50.0)
+	name_label.position = Vector2(CENTER_X - 300.0, 165.0)
+	name_label.pivot_offset = Vector2(300.0, 25.0)
+	name_label.scale = Vector2(0.6, 0.6)
+	name_label.modulate.a = 0.0
+	add_child(name_label)
 
-		var block := ColorRect.new()
-		block.color = PODIUM_COLORS[place]
-		block.size = Vector2(BLOCK_WIDTH, height)
-		block.pivot_offset = Vector2(BLOCK_WIDTH * 0.5, height)
-		unit.add_child(block)
-		_podium_blocks[place] = block
+	var time_label := Label.new()
+	time_label.text = "%.2fs" % winner.finish_time
+	time_label.add_theme_font_size_override("font_size", 18)
+	time_label.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.85))
+	time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	time_label.custom_minimum_size = Vector2(600.0, 24.0)
+	time_label.position = Vector2(CENTER_X - 300.0, 210.0)
+	time_label.modulate.a = 0.0
+	add_child(time_label)
 
-		var place_label := Label.new()
-		place_label.text = "%d" % (place + 1)
-		place_label.add_theme_font_size_override("font_size", 30)
-		place_label.custom_minimum_size = Vector2(BLOCK_WIDTH, 40.0)
-		place_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		place_label.position = Vector2(0.0, 6.0)
-		unit.add_child(place_label)
-
-		var name_label := Label.new()
-		name_label.text = state.horse.horse_name
-		name_label.add_theme_color_override("font_color", state.horse.silk_secondary)
-		name_label.custom_minimum_size = Vector2(BLOCK_WIDTH + 40.0, 24.0)
-		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_label.position = Vector2(-20.0, -50.0)
-		unit.add_child(name_label)
-
-		var time_label := Label.new()
-		time_label.text = "%.2fs" % state.finish_time
-		time_label.custom_minimum_size = Vector2(BLOCK_WIDTH, 20.0)
-		time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		time_label.position = Vector2(0.0, -26.0)
-		unit.add_child(time_label)
-
-## Each block rises with a big overshoot, then lands with a squash-and-
-## stretch bounce (wide+flat, then tall+thin, then settle) instead of just
-## stopping dead — gold's bounce is the biggest and gets a continuous idle
-## pulse afterward so the winner keeps drawing the eye.
-func _reveal_podium() -> void:
-	var delay: float = 0.0
-	for place in REVEAL_ORDER:
-		var unit: Control = get_node("podium_unit_%d" % place)
-		var block: ColorRect = _podium_blocks[place]
-		var tween: Tween = create_tween()
-		tween.tween_interval(delay)
-		tween.tween_property(unit, "position:y", _podium_rest_y[place], RISE_DURATION) \
-			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tween.tween_callback(_land_bounce.bind(block, place))
-		delay += REVEAL_STAGGER
-
-func _land_bounce(block: ColorRect, place: int) -> void:
-	var is_winner: bool = place == 0
-	var squash: float = 1.35 if is_winner else 1.2
 	var tween: Tween = create_tween()
-	tween.tween_property(block, "scale", Vector2(squash, 1.0 / squash), 0.09)
-	tween.tween_property(block, "scale", Vector2(1.0 / squash * 0.95, squash * 0.95), 0.09)
-	tween.tween_property(block, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	if is_winner:
-		tween.tween_callback(_start_winner_pulse.bind(block))
+	tween.set_parallel(true)
+	tween.tween_property(name_label, "scale", Vector2(1.1, 1.1), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.chain().tween_property(name_label, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_SINE)
+	tween.set_parallel(true)
+	tween.tween_property(name_label, "modulate:a", 1.0, 0.15)
+	tween.tween_property(time_label, "modulate:a", 1.0, 0.15)
 
-func _start_winner_pulse(block: ColorRect) -> void:
-	var pulse: Tween = create_tween()
-	pulse.set_loops()
-	pulse.tween_property(block, "scale", Vector2(1.06, 1.06), 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	pulse.tween_property(block, "scale", Vector2.ONE, 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+## One frame of pure white flashed over the whole screen right as the
+## fanfare/crowd cheer/rumble/confetti all land — a fast in, slightly slower
+## out (a real camera flash decays, it doesn't cut) — sells the "moment of
+## impact" the old podium used to carry via its rise-and-land bounce.
+func _flash_screen() -> void:
+	var flash := ColorRect.new()
+	flash.color = Color.WHITE
+	flash.size = size
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	flash.modulate.a = 0.0
+	add_child(flash)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(flash, "modulate:a", 0.85, 0.05)
+	tween.tween_property(flash, "modulate:a", 0.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.tween_callback(flash.queue_free)
 
 ## Multi-color confetti raining down across the whole width of the screen —
 ## several single-color CPUParticles2D emitters layered together, since one
@@ -252,7 +246,9 @@ func _build_leg1_continue() -> void:
 
 	var list_box: VBoxContainer = _add_full_order_list(BASELINE_Y + 100.0)
 	var continue_btn := Button.new()
-	continue_btn.text = "Continue to Race 2 →"
+	continue_btn.text = "CONTINUE TO RACE 2 →"
+	continue_btn.theme_type_variation = "PrimaryButton"
+	continue_btn.custom_minimum_size = Vector2(280.0, 52.0)
 	continue_btn.pressed.connect(func(): continue_to_next_race.emit())
 	list_box.add_child(continue_btn)
 	UITheme.add_button_juice(continue_btn)
@@ -274,7 +270,9 @@ func _build_watch_only_continue() -> void:
 
 	var list_box: VBoxContainer = _add_full_order_list(BASELINE_Y + 100.0)
 	var continue_btn := Button.new()
-	continue_btn.text = "Continue"
+	continue_btn.text = "CONTINUE"
+	continue_btn.theme_type_variation = "PrimaryButton"
+	continue_btn.custom_minimum_size = Vector2(280.0, 52.0)
 	continue_btn.pressed.connect(func(): race_again_pressed.emit())
 	list_box.add_child(continue_btn)
 	UITheme.add_button_juice(continue_btn)
@@ -339,28 +337,26 @@ func _build_outcome_and_list(bet_context: Dictionary) -> Array[String]:
 	if won:
 		payout = int(round(payout * (1.0 + Career.get_purse_bonus())))
 
-	var outcome := Label.new()
-	outcome.add_theme_font_size_override("font_size", 20)
-	outcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	outcome.custom_minimum_size = Vector2(400.0, 30.0)
-	outcome.position = Vector2(CENTER_X - 200.0, BASELINE_Y + 60.0)
-
+	var bet_description: String = "%s %s on %s" % [
+		OddsTable.format_money(amount), description, result.field[horse_index].horse.horse_name,
+	] if horse_index < result.field.size() else description
 	if won:
 		Bankroll.pay(payout)
-		outcome.text = "YOU WON %s! (bankroll: %s)" % [OddsTable.format_money(payout), OddsTable.format_money(Bankroll.balance)]
-		outcome.add_theme_color_override("font_color", Color(0.3, 0.9, 0.3))
 		AudioManager.play_sfx("win_jingle", -8.0) # this file is mastered hot; -8dB brings it in line with everything else
 	else:
-		outcome.text = "You lost your %s %s bet. (bankroll: %s)" % [
-			OddsTable.format_money(amount), description, OddsTable.format_money(Bankroll.balance),
-		]
-		outcome.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
 		AudioManager.play_sfx("lose_sting", -8.0) # matches win_jingle's cut so neither outcome jolts louder than the other
-	add_child(outcome)
+	var chip: Control = _build_outcome_chip(won, payout, bet_description)
+	chip.position = Vector2(CENTER_X - OUTCOME_CHIP_SIZE.x * 0.5, BASELINE_Y + 50.0)
+	add_child(chip)
 
-	var list_box: VBoxContainer = _add_full_order_list(BASELINE_Y + 100.0)
+	# Pushed down from the old +100 to clear the chip above (BASELINE_Y+50,
+	# OUTCOME_CHIP_SIZE.y=100 tall — the old single-line Label it replaced
+	# was much shorter and never needed this much room).
+	var list_box: VBoxContainer = _add_full_order_list(BASELINE_Y + 165.0)
 	var again_btn := Button.new()
-	again_btn.text = "Race Again"
+	again_btn.text = "RACE AGAIN"
+	again_btn.theme_type_variation = "PrimaryButton"
+	again_btn.custom_minimum_size = Vector2(280.0, 52.0)
 	again_btn.pressed.connect(func(): race_again_pressed.emit())
 	list_box.add_child(again_btn)
 	UITheme.add_button_juice(again_btn)
@@ -368,6 +364,61 @@ func _build_outcome_and_list(bet_context: Dictionary) -> Array[String]:
 
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	return Career.record_bet_outcome(won, amount, win_tier)
+
+## AJ: "clean up the you won money text box make it look tight" — was one
+## long run-on sentence ("YOU WON $X! (bankroll: $Y)") in a single Label with
+## no card of its own. Now a compact bordered chip (same glass-panel language
+## as the payoff board next to it) with the actual dollar amount as its own
+## big, bold focal line — a real number, not a middle word buried in a
+## sentence — and the bet description underneath in a quieter, smaller line.
+## Bankroll total dropped entirely: BettingUI/TrackLobby's own balance
+## display already shows that continuously, repeating it here was clutter
+## this specific chip doesn't need.
+func _build_outcome_chip(won: bool, payout: int, bet_description: String) -> Control:
+	var accent: Color = Color(0.35, 0.95, 0.4) if won else Color(0.95, 0.35, 0.35)
+	var chip: Panel = UITheme.make_glass_panel(OUTCOME_CHIP_SIZE, 16.0, Color(UITheme.COLOR_BG, 0.6), accent)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 14)
+	chip.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 2)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	margin.add_child(box)
+
+	var eyebrow := Label.new()
+	eyebrow.theme_type_variation = "EyebrowLabel"
+	eyebrow.text = "🏆 YOU WON" if won else "LOST THE BET"
+	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	eyebrow.add_theme_color_override("font_color", accent)
+	box.add_child(eyebrow)
+
+	var amount_label := Label.new()
+	amount_label.theme_type_variation = "HeadingLabel"
+	if won:
+		amount_label.text = "+%s" % OddsTable.format_money(payout)
+		amount_label.add_theme_font_size_override("font_size", 32)
+	else:
+		# A loss has no payout figure worth headlining — the bet amount lost
+		# is already in the description line below; leading with "-$0" would
+		# read as a bug, not a real number.
+		amount_label.text = "NO PAYOUT"
+		amount_label.add_theme_font_size_override("font_size", 22)
+	amount_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	amount_label.add_theme_color_override("font_color", accent)
+	box.add_child(amount_label)
+
+	var desc_label := Label.new()
+	desc_label.text = bet_description
+	desc_label.add_theme_font_size_override("font_size", 14)
+	desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	desc_label.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.75))
+	box.add_child(desc_label)
+
+	return chip
 
 ## Small stacked "🏆 Achievement Unlocked" badges in the top-right corner,
 ## each fading in slightly staggered — reuses the same fade-Tween idiom as
@@ -389,7 +440,92 @@ func _show_achievement_toasts(ids: Array[String]) -> void:
 		tween.tween_interval(0.3 + 0.25 * i)
 		tween.tween_property(label, "modulate:a", 1.0, 0.4)
 
-const BACKDROP_SIZE: Vector2 = Vector2(360.0, 380.0)
+const BACKDROP_SIZE: Vector2 = Vector2(360.0, 340.0) # sized for chip + 2-column order list (see _add_full_order_list) + button, now that BASELINE_Y no longer wastes ~220px on the removed podium risers
+const PAYOFF_BOARD_SIZE: Vector2 = Vector2(320.0, 190.0)
+## Traditional US racetrack "$2 Mutuel Payoffs" board convention — shown
+## regardless of what anyone actually staked, exactly like a real broadcast's
+## payout graphic. Not tied to Bankroll/BettingUI's own bet-amount scale at
+## all; it's a race-wide informational graphic, not a personal bet result.
+const PAYOFF_BET_BASE: int = 2
+
+## Real racetrack broadcasts show this after every race regardless of whether
+## you personally had a bet in — win/place/show payout for the top 3
+## finishers off a standard $2 bet. Previously the single biggest missing
+## piece of broadcast authenticity here: the game only ever showed the
+## PLAYER's own bet outcome as one sentence (see _build_outcome_and_list),
+## never the track-wide payout graphic every real broadcast overlays. Called
+## from setup() itself (not from any bet_context branch) so it appears
+## whether or not this particular race had a bet riding on it, same as a
+## real board. Positioned to the right of the main backdrop card rather than
+## sharing it — the existing backdrop is a fixed 360x380 already close to
+## full with the outcome text + full finish order + button, and this
+## screen's layout is entirely fixed-pixel (see CENTER_X/BASELINE_Y above),
+## so a separate card avoids fighting that layout for vertical space.
+func _build_payoff_board() -> void:
+	if result.finish_order.size() < 2:
+		return # need at least a win+place for a board to say anything
+
+	var board: Panel = UITheme.make_glass_panel(PAYOFF_BOARD_SIZE, 16.0, Color(UITheme.COLOR_BG, 0.6))
+	board.position = Vector2(CENTER_X + BACKDROP_SIZE.x * 0.5 + 20.0, BASELINE_Y + 40.0)
+	add_child(board)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 16)
+	board.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	margin.add_child(box)
+
+	var eyebrow := Label.new()
+	eyebrow.theme_type_variation = "EyebrowLabel"
+	eyebrow.text = "$%d MUTUEL PAYOFFS" % PAYOFF_BET_BASE
+	box.add_child(eyebrow)
+
+	var win_state: RaceHorseState = result.field[result.finish_order[0]]
+	box.add_child(_payoff_row(win_state.horse.horse_name, [
+		["WIN", OddsTable.payout(PAYOFF_BET_BASE, win_state.tier, OddsTable.BetType.WIN)],
+		["PLACE", OddsTable.payout(PAYOFF_BET_BASE, win_state.tier, OddsTable.BetType.PLACE)],
+		["SHOW", OddsTable.payout(PAYOFF_BET_BASE, win_state.tier, OddsTable.BetType.SHOW)],
+	]))
+
+	var place_state: RaceHorseState = result.field[result.finish_order[1]]
+	box.add_child(_payoff_row(place_state.horse.horse_name, [
+		["PLACE", OddsTable.payout(PAYOFF_BET_BASE, place_state.tier, OddsTable.BetType.PLACE)],
+		["SHOW", OddsTable.payout(PAYOFF_BET_BASE, place_state.tier, OddsTable.BetType.SHOW)],
+	]))
+
+	if result.finish_order.size() >= 3:
+		var show_state: RaceHorseState = result.field[result.finish_order[2]]
+		box.add_child(_payoff_row(show_state.horse.horse_name, [
+			["SHOW", OddsTable.payout(PAYOFF_BET_BASE, show_state.tier, OddsTable.BetType.SHOW)],
+		]))
+
+## One finisher's payoff line(s) — `entries` is an Array of [label, amount]
+## pairs, e.g. [["WIN", 5], ["PLACE", 3], ["SHOW", 2]] for the winner, down to
+## just [["SHOW", 2]] for 3rd. Horse name on its own line above since some
+## names run long enough to crowd three payout figures on one line otherwise.
+func _payoff_row(horse_name: String, entries: Array) -> VBoxContainer:
+	var row_box := VBoxContainer.new()
+	row_box.add_theme_constant_override("separation", 1)
+
+	var name_label := Label.new()
+	name_label.text = horse_name
+	name_label.add_theme_font_size_override("font_size", 15)
+	row_box.add_child(name_label)
+
+	var line_parts: Array[String] = []
+	for entry in entries:
+		line_parts.append("%s %s" % [entry[0], OddsTable.format_money(entry[1])])
+	var line_label := Label.new()
+	line_label.text = "    " + "     ".join(line_parts)
+	line_label.add_theme_font_size_override("font_size", 14)
+	line_label.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
+	row_box.add_child(line_label)
+
+	return row_box
 
 ## Glass card grouping the outcome text + full finish order + Race Again
 ## button into one visually distinct region instead of them floating loose
@@ -397,24 +533,36 @@ const BACKDROP_SIZE: Vector2 = Vector2(360.0, 380.0)
 ## height varies (a Daily Double's "still live" note is shorter than a
 ## resolved bet's win/loss line + 8-horse order list + button).
 func _add_backdrop_card() -> void:
-	var backdrop: Panel = UITheme.make_glass_panel(BACKDROP_SIZE, 20.0, Color(0.016, 0.027, 0.047, 0.55))
+	var backdrop: Panel = UITheme.make_glass_panel(BACKDROP_SIZE, 20.0, Color(UITheme.COLOR_BG, 0.55))
 	backdrop.position = Vector2(CENTER_X - BACKDROP_SIZE.x * 0.5, BASELINE_Y + 40.0)
 	add_child(backdrop)
 
+## 2-column grid, not one long vertical list — AJ: "you cant even see the
+## number 8 horse it cuts off the name." Fixed mainly by BASELINE_Y no
+## longer wasting ~220px on the removed podium risers (see that const's own
+## comment), but halving the list's own height is a real, cheap second
+## margin of safety against an 8+ horse field ever running off the bottom
+## of a fixed 900px window again.
 func _add_full_order_list(top_y: float) -> VBoxContainer:
 	var list_box := VBoxContainer.new()
-	list_box.position = Vector2(CENTER_X - 150.0, top_y)
+	list_box.position = Vector2(CENTER_X - 165.0, top_y)
 	add_child(list_box)
 
 	var header := Label.new()
 	header.text = "Full order (%.1fs):" % result.duration
 	list_box.add_child(header)
 
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 20)
+	list_box.add_child(grid)
+
 	for place in range(result.finish_order.size()):
 		var idx: int = result.finish_order[place]
 		var state: RaceHorseState = result.field[idx]
 		var row := Label.new()
 		row.text = "%d. %s — %.2fs" % [place + 1, state.horse.horse_name, state.finish_time]
-		list_box.add_child(row)
+		row.add_theme_font_size_override("font_size", 14)
+		grid.add_child(row)
 
 	return list_box

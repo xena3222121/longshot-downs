@@ -14,27 +14,30 @@ extends Node
 
 const FONT_PATH: String = "res://assets/fonts/PlayfairDisplay-Variable.ttf"
 const GLASS_SHADER_PATH: String = "res://assets/shaders/glass_panel.gdshader"
+const VIGNETTE_SHADER_PATH: String = "res://assets/shaders/vignette.gdshader"
 
 ## Bumped from the old 6px clubhouse-chrome radius — current game UI reads as
 ## soft/rounded "glass" chips rather than sharp-cornered panels; this one
 ## constant now drives every stock StyleBoxFlat panel/button in the theme.
 const CORNER_RADIUS: int = 16
 
-# "Neon Downs" palette: near-black glass panels + electric cyan primary
-# accent + magenta secondary/negative accent — a night-race broadcast HUD
-# feel rather than the old daytime clubhouse look. Every call site still
-# reads UITheme.COLOR_GOLD / COLOR_MAROON (kept as the constant NAMES so nothing
-# downstream had to change) — only the actual Color values moved from
-# brass/maroon to cyan/magenta, so the whole game re-skins from these four
-# lines without touching Button/Label/RaceTrack3D call sites individually.
-const COLOR_BG: Color = Color(0.016, 0.024, 0.043)
-const COLOR_PANEL: Color = Color(0.043, 0.067, 0.106)
-const COLOR_PANEL_LIGHT: Color = Color(0.071, 0.106, 0.161)
-const COLOR_GOLD: Color = Color(0.184, 0.878, 0.976)
-const COLOR_GOLD_BRIGHT: Color = Color(0.588, 0.976, 1.0)
-const COLOR_CREAM: Color = Color(0.859, 0.925, 0.965)
-const COLOR_MAROON: Color = Color(0.847, 0.184, 0.616)
-const COLOR_MAROON_LIGHT: Color = Color(0.949, 0.353, 0.741)
+# "Racing Elegance" palette — AJ, reverting the "Neon Downs" cyan/magenta
+# night-broadcast reskin: "ditch the neon, make it look more appealing to a
+# boomer." Deep clubhouse green panels + warm brass/gold primary accent +
+# traditional burgundy secondary/negative accent, closer to a real Kentucky-
+# Derby-clubhouse look than a cyberpunk HUD. Every call site still reads
+# UITheme.COLOR_GOLD / COLOR_MAROON (kept as the constant NAMES across BOTH
+# reskins so nothing downstream ever had to change) — only the actual Color
+# values move, so the whole game re-skins from these four lines without
+# touching Button/Label/RaceTrack3D call sites individually.
+const COLOR_BG: Color = Color(0.035, 0.058, 0.043)
+const COLOR_PANEL: Color = Color(0.067, 0.098, 0.074)
+const COLOR_PANEL_LIGHT: Color = Color(0.11, 0.155, 0.117)
+const COLOR_GOLD: Color = Color(0.75, 0.6, 0.24)
+const COLOR_GOLD_BRIGHT: Color = Color(0.94, 0.8, 0.42)
+const COLOR_CREAM: Color = Color(0.93, 0.9, 0.82)
+const COLOR_MAROON: Color = Color(0.58, 0.14, 0.15)
+const COLOR_MAROON_LIGHT: Color = Color(0.76, 0.28, 0.24)
 
 func _ready() -> void:
 	get_window().theme = build_theme()
@@ -79,6 +82,64 @@ static func build_theme() -> Theme:
 		theme.set_stylebox("pressed", variant, _panel_style(COLOR_PANEL_LIGHT.darkened(0.25), COLOR_GOLD, 3))
 		theme.set_stylebox("focus", variant, _panel_style(Color(0, 0, 0, 0), COLOR_GOLD_BRIGHT, 2))
 
+	# PopupMenu (the dropdown list Godot opens for every OptionButton — bet
+	# type/amount in BettingUI, track theme/camera mode in Settings) was
+	# completely unstyled before this: arguably the single highest-visibility
+	# "unstyled default widget" moment in the whole game, since it fires on an
+	# ordinary core-loop action (picking a bet type) rather than a rarely
+	# opened dialog, and previously popped up as Godot's stock light-gray
+	# system menu regardless of everything else on screen being themed.
+	var popup_panel := StyleBoxFlat.new()
+	popup_panel.bg_color = COLOR_PANEL
+	popup_panel.border_color = COLOR_GOLD
+	popup_panel.set_border_width_all(2)
+	popup_panel.set_corner_radius_all(10)
+	popup_panel.content_margin_left = 6.0
+	popup_panel.content_margin_right = 6.0
+	popup_panel.content_margin_top = 8.0
+	popup_panel.content_margin_bottom = 8.0
+	theme.set_stylebox("panel", "PopupMenu", popup_panel)
+
+	var popup_hover := StyleBoxFlat.new()
+	popup_hover.bg_color = COLOR_PANEL_LIGHT
+	popup_hover.border_color = COLOR_GOLD_BRIGHT
+	popup_hover.set_border_width_all(1)
+	popup_hover.set_corner_radius_all(6)
+	theme.set_stylebox("hover", "PopupMenu", popup_hover)
+
+	var popup_separator := StyleBoxFlat.new()
+	popup_separator.bg_color = Color(COLOR_GOLD, 0.35)
+	popup_separator.content_margin_top = 1.0
+	popup_separator.content_margin_bottom = 1.0
+	theme.set_stylebox("separator", "PopupMenu", popup_separator)
+	theme.set_stylebox("labeled_separator_left", "PopupMenu", popup_separator)
+	theme.set_stylebox("labeled_separator_right", "PopupMenu", popup_separator)
+
+	theme.set_font("font", "PopupMenu", body_font)
+	theme.set_font_size("font_size", "PopupMenu", 19)
+	theme.set_color("font_color", "PopupMenu", COLOR_CREAM)
+	theme.set_color("font_hover_color", "PopupMenu", COLOR_GOLD_BRIGHT)
+	theme.set_color("font_accelerator_color", "PopupMenu", COLOR_GOLD)
+	theme.set_color("font_disabled_color", "PopupMenu", Color(COLOR_CREAM, 0.35))
+	theme.set_color("font_separator_color", "PopupMenu", Color(COLOR_GOLD, 0.6))
+	theme.set_constant("v_separation", "PopupMenu", 6)
+	theme.set_constant("item_start_padding", "PopupMenu", 10)
+	theme.set_constant("item_end_padding", "PopupMenu", 10)
+
+	# Sliders (Settings' volume controls) were previously left completely
+	# unstyled — Godot's stock gray track/circle-grabber sitting inside this
+	# otherwise fully dark-neon-themed dialog was one of the more obvious
+	# "default engine widget" tells, the same category of problem the
+	# TitleScreen polish pass fixed for HSeparator/Button.
+	var slider_grabber: GradientTexture2D = _grabber_icon(COLOR_GOLD_BRIGHT)
+	for variant in ["HSlider", "VSlider"]:
+		theme.set_stylebox("slider", variant, _panel_style(COLOR_PANEL, COLOR_PANEL_LIGHT, 1))
+		theme.set_stylebox("grabber_area", variant, _panel_style(COLOR_GOLD, COLOR_GOLD, 0))
+		theme.set_stylebox("grabber_area_highlight", variant, _panel_style(COLOR_GOLD_BRIGHT, COLOR_GOLD_BRIGHT, 0))
+		theme.set_icon("grabber", variant, slider_grabber)
+		theme.set_icon("grabber_highlight", variant, slider_grabber)
+		theme.set_icon("grabber_disabled", variant, slider_grabber)
+
 	theme.set_stylebox("panel", "Panel", _panel_style(COLOR_PANEL, COLOR_GOLD, 2))
 	theme.set_stylebox("panel", "PanelContainer", _panel_style(COLOR_PANEL, COLOR_GOLD, 2))
 
@@ -122,6 +183,67 @@ static func build_theme() -> Theme:
 	theme.set_font_size("font_size", "MaroonButton", 22)
 	theme.set_color("font_color", "MaroonButton", COLOR_CREAM)
 	theme.set_color("font_hover_color", "MaroonButton", COLOR_GOLD_BRIGHT)
+
+	# "PrimaryButton" — a single standout call-to-action style (TitleScreen's
+	# "Play Now", and anywhere else with exactly one dominant action). A
+	# solid bright fill instead of the plain Button's dark-panel-with-border
+	# reads as the obvious thing to press; dark text on the bright fill
+	# (rather than the usual cream) keeps it legible against COLOR_GOLD's high
+	# luminance. Previously every menu button used the identical plain Button
+	# style, which is exactly the "five identical slabs, no hierarchy" look
+	# that reads as an unfinished placeholder menu.
+	theme.set_type_variation("PrimaryButton", "Button")
+	var primary_normal: StyleBoxFlat = _panel_style(COLOR_GOLD, COLOR_GOLD_BRIGHT, 2)
+	primary_normal.shadow_size = 16
+	var primary_hover: StyleBoxFlat = _panel_style(COLOR_GOLD_BRIGHT, Color.WHITE, 2)
+	primary_hover.shadow_size = 20
+	theme.set_stylebox("normal", "PrimaryButton", primary_normal)
+	theme.set_stylebox("hover", "PrimaryButton", primary_hover)
+	theme.set_stylebox("pressed", "PrimaryButton", _panel_style(COLOR_GOLD.darkened(0.15), COLOR_GOLD_BRIGHT, 3))
+	theme.set_stylebox("focus", "PrimaryButton", _panel_style(Color(0, 0, 0, 0), Color.WHITE, 2))
+	theme.set_font("font", "PrimaryButton", heading_font)
+	theme.set_font_size("font_size", "PrimaryButton", 24)
+	theme.set_color("font_color", "PrimaryButton", COLOR_BG)
+	theme.set_color("font_hover_color", "PrimaryButton", COLOR_BG)
+	theme.set_color("font_pressed_color", "PrimaryButton", COLOR_BG)
+
+	# "GhostButton" — the quiet secondary-navigation counterpart (Stable,
+	# Settings, Credits): a mostly-transparent fill and a thin low-alpha
+	# border so it recedes behind PrimaryButton instead of competing with it
+	# at equal visual weight. Uses _quiet_style, NOT _panel_style — a real
+	# screenshot of this (see screenshot_capture.gd dev tool) caught that
+	# _panel_style bakes in a shadow/glow unconditionally, so the first
+	# version of this "quiet" style still glowed like every other lit-HUD
+	# button and barely read as de-emphasized at all.
+	theme.set_type_variation("GhostButton", "Button")
+	theme.set_stylebox("normal", "GhostButton", _quiet_style(Color(COLOR_PANEL, 0.2), Color(COLOR_GOLD, 0.3), 1))
+	theme.set_stylebox("hover", "GhostButton", _quiet_style(Color(COLOR_PANEL_LIGHT, 0.4), Color(COLOR_GOLD, 0.7), 1))
+	theme.set_stylebox("pressed", "GhostButton", _quiet_style(Color(COLOR_PANEL_LIGHT.darkened(0.25), 0.55), COLOR_GOLD, 2))
+	theme.set_stylebox("focus", "GhostButton", _quiet_style(Color(0, 0, 0, 0), COLOR_GOLD_BRIGHT, 2))
+	theme.set_font("font", "GhostButton", body_font)
+	theme.set_font_size("font_size", "GhostButton", 18)
+	theme.set_color("font_color", "GhostButton", Color(COLOR_CREAM, 0.65))
+	theme.set_color("font_hover_color", "GhostButton", COLOR_GOLD_BRIGHT)
+	theme.set_color("font_pressed_color", "GhostButton", COLOR_GOLD)
+
+	# "QuietButton" — for a single de-emphasized action pulled OUT of a menu
+	# card entirely (currently just TitleScreen's Exit to Desktop). The old
+	# approach (reusing "MaroonButton", the same bold solid-fill/glow style
+	# used for genuine warnings elsewhere) defeated the whole point of
+	# separating it from the main card — a real screenshot showed it as the
+	# single LOUDEST element on the screen, competing with PrimaryButton
+	# instead of receding. This is _quiet_style with a maroon tint instead of
+	# gold, so it still reads as "leave/danger" via color alone, just quietly.
+	theme.set_type_variation("QuietButton", "Button")
+	theme.set_stylebox("normal", "QuietButton", _quiet_style(Color(COLOR_MAROON, 0.12), Color(COLOR_MAROON, 0.4), 1))
+	theme.set_stylebox("hover", "QuietButton", _quiet_style(Color(COLOR_MAROON, 0.3), COLOR_MAROON_LIGHT, 1))
+	theme.set_stylebox("pressed", "QuietButton", _quiet_style(Color(COLOR_MAROON, 0.45), COLOR_MAROON, 2))
+	theme.set_stylebox("focus", "QuietButton", _quiet_style(Color(0, 0, 0, 0), COLOR_MAROON_LIGHT, 2))
+	theme.set_font("font", "QuietButton", body_font)
+	theme.set_font_size("font_size", "QuietButton", 16)
+	theme.set_color("font_color", "QuietButton", Color(COLOR_CREAM, 0.55))
+	theme.set_color("font_hover_color", "QuietButton", COLOR_MAROON_LIGHT)
+	theme.set_color("font_pressed_color", "QuietButton", COLOR_MAROON)
 
 	return theme
 
@@ -183,6 +305,44 @@ static func _panel_style(fill: Color, border: Color, border_width: int) -> Style
 	sb.shadow_size = 8
 	return sb
 
+## Flat counterpart to _panel_style with NO glow/shadow at all — for anything
+## that's actually meant to recede (GhostButton/QuietButton) rather than read
+## as lit HUD glass. _panel_style's shadow is unconditional, which is exactly
+## why the first version of GhostButton/Exit-to-Desktop still looked as loud
+## as every other button despite a lower-alpha fill/border (confirmed via a
+## real screenshot, not assumed) — a glow is a glow regardless of how
+## transparent the fill under it is.
+static func _quiet_style(fill: Color, border: Color, border_width: int) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = fill
+	sb.border_color = border
+	sb.set_border_width_all(border_width)
+	sb.set_corner_radius_all(CORNER_RADIUS)
+	sb.content_margin_left = 18.0
+	sb.content_margin_right = 18.0
+	sb.content_margin_top = 10.0
+	sb.content_margin_bottom = 10.0
+	return sb
+
+## A small solid-fill circle used as a Slider's grabber handle (Godot draws
+## the grabber from a plain icon/Texture2D, not a StyleBox, unlike the rest of
+## this theme) — GradientTexture2D with a very tight center-to-edge falloff
+## reads as a crisp anti-aliased dot rather than a soft glow blob, keeping it
+## a genuinely different visual role from _build_glow_blob's ambient-light
+## use of the same resource type.
+static func _grabber_icon(color: Color, diameter: float = 18.0) -> GradientTexture2D:
+	var gradient := Gradient.new()
+	gradient.colors = PackedColorArray([color, color, Color(color, 0.0)])
+	gradient.offsets = PackedFloat32Array([0.0, 0.82, 1.0])
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill = GradientTexture2D.FILL_RADIAL
+	texture.fill_from = Vector2(0.5, 0.5)
+	texture.fill_to = Vector2(1.0, 0.5)
+	texture.width = int(diameter)
+	texture.height = int(diameter)
+	return texture
+
 ## Real frosted-glass panel — blurs whatever's behind it (the 3D racetrack,
 ## another panel, whatever) rather than faking depth with an opaque tint, via
 ## assets/shaders/glass_panel.gdshader. Distinct from the plain StyleBoxFlat
@@ -232,3 +392,28 @@ static func make_glass_panel_container(corner_radius: float = CORNER_RADIUS, tin
 	panel.material = mat
 	panel.resized.connect(func(): mat.set_shader_parameter("rect_size", panel.size))
 	return panel
+
+## A full-screen cinematic vignette + faint scanline/grain overlay (see
+## assets/shaders/vignette.gdshader) — call once per screen that wants the
+## "broadcast night" atmosphere this game's identity is built around
+## (currently TitleScreen; safe to reuse on TrackLobby/RaceTrack3D later).
+## Unlike make_glass_panel this never reads the screen texture — it only
+## darkens/textures whatever is already drawn beneath it — so the caller can
+## freely place it above background art/glows and below foreground UI
+## without it blurring anything. Caller just add_child()s the result at the
+## point in the tree where that layering is correct.
+static func make_vignette_overlay() -> ColorRect:
+	var overlay := ColorRect.new()
+	overlay.color = COLOR_BG
+	overlay.anchor_right = 1.0
+	overlay.anchor_bottom = 1.0
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var mat := ShaderMaterial.new()
+	mat.shader = load(VIGNETTE_SHADER_PATH)
+	mat.set_shader_parameter("edge_color", COLOR_BG)
+	mat.set_shader_parameter("rect_size", Vector2(1600.0, 900.0))
+	overlay.material = mat
+	overlay.resized.connect(func(): mat.set_shader_parameter("rect_size", overlay.size))
+
+	return overlay

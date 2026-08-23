@@ -24,6 +24,8 @@ func _ready() -> void:
 
 func _build() -> void:
 	_build_ambient_glow()
+	add_child(UITheme.make_vignette_overlay())
+	_build_footer()
 
 	var center := CenterContainer.new()
 	center.anchor_right = 1.0
@@ -35,27 +37,42 @@ func _build() -> void:
 	content.add_theme_constant_override("separation", 18)
 	center.add_child(content)
 
+	# Title lockup: flanking diamond ornaments instead of a bare Label — a
+	# plain centered word is exactly the "unstyled menu mockup" look this pass
+	# is fixing. Ornaments are static (only the title Label itself pulses/
+	# glows via _start_title_pulse) so they read as fixed logo furniture
+	# rather than competing for attention with the animated wordmark.
+	var title_row := HBoxContainer.new()
+	title_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_row.add_theme_constant_override("separation", 22)
+	content.add_child(title_row)
+
+	title_row.add_child(_build_title_ornament())
+
 	var title := Label.new()
 	title.theme_type_variation = "HeadingLabel"
 	title.add_theme_font_size_override("font_size", 76)
 	title.text = "LONGSHOT DOWNS"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	content.add_child(title)
+	title_row.add_child(title)
 	_start_title_pulse(title)
 
+	title_row.add_child(_build_title_ornament())
+
 	var subtitle := Label.new()
-	subtitle.text = "— A Thoroughbred Racing & Wagering Experience —"
+	subtitle.theme_type_variation = "EyebrowLabel"
+	subtitle.text = "LIVE THOROUGHBRED RACING & WAGERING"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
-	subtitle.add_theme_font_size_override("font_size", 18)
+	subtitle.add_theme_font_size_override("font_size", 15)
 	content.add_child(subtitle)
 
-	var rule := HSeparator.new()
-	rule.custom_minimum_size = Vector2(360.0, 0.0)
-	content.add_child(rule)
+	var spacer_top := Control.new()
+	spacer_top.custom_minimum_size = Vector2(0.0, 4.0)
+	content.add_child(spacer_top)
+	content.add_child(_build_fading_rule(420.0))
 
 	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0.0, 24.0)
+	spacer.custom_minimum_size = Vector2(0.0, 20.0)
 	content.add_child(spacer)
 
 	var menu_panel: PanelContainer = UITheme.make_glass_panel_container()
@@ -67,60 +84,139 @@ func _build() -> void:
 	menu_panel.add_child(menu_margin)
 
 	var menu := VBoxContainer.new()
-	menu.add_theme_constant_override("separation", 14)
+	menu.add_theme_constant_override("separation", 12)
 	menu_margin.add_child(menu)
 
+	# Button hierarchy: Play Now is the single dominant call-to-action
+	# (PrimaryButton — larger, solid bright fill); Stable/Settings/Credits are
+	# quieter equal-weight secondary nav (GhostButton, smaller). Previously
+	# all five actions used the identical plain Button style at the same
+	# size, which reads as an unfinished placeholder menu rather than a
+	# designed one.
 	var play_btn := Button.new()
-	play_btn.text = "Play Now"
-	play_btn.custom_minimum_size = BUTTON_SIZE
+	play_btn.text = "PLAY NOW"
+	play_btn.theme_type_variation = "PrimaryButton"
+	play_btn.custom_minimum_size = Vector2(BUTTON_SIZE.x, 68.0)
 	play_btn.pressed.connect(_on_play_pressed)
 	menu.add_child(play_btn)
 	UITheme.add_button_juice(play_btn)
 
-	var stable_btn := Button.new()
-	stable_btn.text = "Stable"
-	stable_btn.custom_minimum_size = BUTTON_SIZE
-	stable_btn.pressed.connect(_show_stable)
-	menu.add_child(stable_btn)
-	UITheme.add_button_juice(stable_btn)
+	var secondary_spacer := Control.new()
+	secondary_spacer.custom_minimum_size = Vector2(0.0, 8.0)
+	menu.add_child(secondary_spacer)
 
-	var settings_btn := Button.new()
-	settings_btn.text = "Settings"
-	settings_btn.custom_minimum_size = BUTTON_SIZE
-	settings_btn.pressed.connect(_show_settings)
-	menu.add_child(settings_btn)
-	UITheme.add_button_juice(settings_btn)
+	for entry in [["Stable", _show_stable], ["Settings", _show_settings], ["Credits", _show_credits]]:
+		var nav_btn := Button.new()
+		nav_btn.text = entry[0]
+		nav_btn.theme_type_variation = "GhostButton"
+		nav_btn.custom_minimum_size = Vector2(BUTTON_SIZE.x, 50.0)
+		nav_btn.pressed.connect(entry[1])
+		menu.add_child(nav_btn)
+		UITheme.add_button_juice(nav_btn)
 
-	var credits_btn := Button.new()
-	credits_btn.text = "Credits"
-	credits_btn.custom_minimum_size = BUTTON_SIZE
-	credits_btn.pressed.connect(_show_credits)
-	menu.add_child(credits_btn)
-	UITheme.add_button_juice(credits_btn)
+	var exit_spacer := Control.new()
+	exit_spacer.custom_minimum_size = Vector2(0.0, 22.0)
+	content.add_child(exit_spacer)
 
+	# Exit deliberately lives OUTSIDE the glass card, smaller than even the
+	# secondary nav row — quitting the game is not a peer of Stable/Settings/
+	# Credits, and giving it equal card real estate was part of the same
+	# "everything is one identical slab" problem as Play Now not standing out.
 	var exit_btn := Button.new()
 	exit_btn.text = "Exit to Desktop"
-	exit_btn.custom_minimum_size = BUTTON_SIZE
-	exit_btn.theme_type_variation = "MaroonButton"
+	exit_btn.custom_minimum_size = Vector2(240.0, 42.0)
+	exit_btn.theme_type_variation = "QuietButton"
 	exit_btn.pressed.connect(func(): get_tree().quit())
-	menu.add_child(exit_btn)
+	content.add_child(exit_btn)
 	UITheme.add_button_juice(exit_btn)
 
 	play_btn.grab_focus.call_deferred() # lets a gamepad/keyboard player navigate the menu with no mouse at all
 
+func _build_title_ornament() -> Label:
+	var ornament := Label.new()
+	ornament.text = "◆"
+	ornament.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
+	ornament.add_theme_font_size_override("font_size", 20)
+	ornament.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	return ornament
+
+## A thin accent line that fades to transparent at both ends, replacing the
+## flat default HSeparator (UITheme never styles Separator controls, so it
+## rendered as Godot's plain default gray line — one of the more obvious
+## "unstyled default widget" tells against this game's otherwise-designed
+## dark palette).
+func _build_fading_rule(width: float, color: Color = UITheme.COLOR_GOLD) -> TextureRect:
+	var gradient := Gradient.new()
+	gradient.colors = PackedColorArray([Color(color, 0.0), Color(color, 0.85), Color(color, 0.0)])
+	gradient.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill_from = Vector2(0.0, 0.0)
+	texture.fill_to = Vector2(1.0, 0.0)
+	texture.width = int(width)
+	texture.height = 2
+
+	var rule := TextureRect.new()
+	rule.texture = texture
+	rule.custom_minimum_size = Vector2(width, 2.0)
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return rule
+
+## Small low-opacity branding line in the bottom-left corner — the kind of
+## "finished product" furniture (copyright/network tag) an unpolished title
+## screen tends to skip entirely. No version number here: this project has no
+## real version-tracking yet, and a fabricated one would be misleading.
+func _build_footer() -> void:
+	var footer := Label.new()
+	footer.theme_type_variation = "EyebrowLabel"
+	footer.text = "LONGSHOT DOWNS RACING NETWORK"
+	footer.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.3))
+	footer.add_theme_font_size_override("font_size", 12)
+	footer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	footer.anchor_left = 0.0
+	footer.anchor_top = 1.0
+	footer.anchor_bottom = 1.0
+	footer.offset_left = 28.0
+	footer.offset_top = -30.0
+	add_child(footer)
+
+	var credit := Label.new()
+	credit.theme_type_variation = "EyebrowLabel"
+	credit.text = "AJ CARROLL — LEAD DEVELOPER & EXECUTIVE PRODUCER"
+	credit.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.3))
+	credit.add_theme_font_size_override("font_size", 12)
+	credit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	credit.anchor_left = 0.0
+	credit.anchor_top = 1.0
+	credit.anchor_bottom = 1.0
+	credit.offset_left = 28.0
+	credit.offset_top = -48.0
+	add_child(credit)
+
 const GLOW_SIZE: float = 1100.0
 
-## A single soft radial glow drifting slowly behind the content — the flat
-## solid-color background otherwise reads as static/dead on the very first
-## screen a player sees. GradientTexture2D (a plain built-in Resource, not a
-## shader) keeps this cheap and simple: a center-bright, edge-transparent
-## radial fill, faded down to a low modulate alpha so it reads as ambient
-## light rather than a visible sprite, breathing in scale and drifting in
-## position on two independent slow loops so it never quite repeats.
+## Two soft radial glows drifting slowly behind the content — a single blob
+## (the old version) reads as "one sticker pasted on a black screen"; a
+## second, dimmer, contrasting-color blob in the opposite corner reads as
+## actual ambient venue lighting instead. Uses this palette's existing
+## cyan-primary/magenta-secondary pairing (same one FinishPodium/BroadcastHUD
+## already use) so it matches the rest of the game's neon-broadcast identity.
 func _build_ambient_glow() -> void:
+	_build_glow_blob(UITheme.COLOR_GOLD, Vector2(0.82, 0.22), GLOW_SIZE, 0.5, Vector2(60.0, 30.0), 9.0)
+	_build_glow_blob(UITheme.COLOR_MAROON, Vector2(0.1, 0.9), GLOW_SIZE * 0.6, 0.3, Vector2(-40.0, -25.0), 12.0)
+
+## One radial glow blob, anchored to a fractional point on-screen (resolution-
+## independent, matching this project's canvas_items/expand stretch mode) and
+## drifting/breathing on its own period so multiple blobs never sync into one
+## obvious pulse. GradientTexture2D (a plain built-in Resource, not a shader)
+## keeps this cheap: a center-bright, edge-transparent radial fill faded down
+## to a low modulate alpha so it reads as ambient light rather than a visible
+## sprite.
+func _build_glow_blob(color: Color, anchor_point: Vector2, size: float, base_alpha: float, drift: Vector2, period: float) -> void:
 	var gradient := Gradient.new()
-	gradient.set_color(0, Color(UITheme.COLOR_GOLD, 0.55))
-	gradient.set_color(1, Color(UITheme.COLOR_GOLD, 0.0))
+	gradient.set_color(0, Color(color, 0.55))
+	gradient.set_color(1, Color(color, 0.0))
 
 	var texture := GradientTexture2D.new()
 	texture.gradient = gradient
@@ -132,25 +228,27 @@ func _build_ambient_glow() -> void:
 
 	var glow := TextureRect.new()
 	glow.texture = texture
-	glow.custom_minimum_size = Vector2(GLOW_SIZE, GLOW_SIZE)
-	glow.size = Vector2(GLOW_SIZE, GLOW_SIZE)
+	glow.custom_minimum_size = Vector2(size, size)
+	glow.size = Vector2(size, size)
 	glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	glow.anchor_left = 0.5
-	glow.anchor_top = 0.5
-	glow.position = Vector2(-GLOW_SIZE * 0.5, -GLOW_SIZE * 0.55)
-	glow.pivot_offset = Vector2(GLOW_SIZE, GLOW_SIZE) * 0.5
-	glow.modulate.a = 0.5
+	glow.anchor_left = anchor_point.x
+	glow.anchor_top = anchor_point.y
+	glow.anchor_right = anchor_point.x
+	glow.anchor_bottom = anchor_point.y
+	glow.position = Vector2(-size * 0.5, -size * 0.5)
+	glow.pivot_offset = Vector2(size, size) * 0.5
+	glow.modulate.a = base_alpha
 	add_child(glow)
 
-	var drift: Tween = create_tween()
-	drift.set_loops()
-	drift.tween_property(glow, "position", glow.position + Vector2(60.0, 30.0), 9.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	drift.tween_property(glow, "position", glow.position + Vector2(-60.0, -20.0), 9.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var drift_tween: Tween = create_tween()
+	drift_tween.set_loops()
+	drift_tween.tween_property(glow, "position", glow.position + drift, period).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	drift_tween.tween_property(glow, "position", glow.position - drift, period).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 	var breathe: Tween = create_tween()
 	breathe.set_loops()
-	breathe.tween_property(glow, "scale", Vector2(1.12, 1.12), 6.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	breathe.tween_property(glow, "scale", Vector2(1.0, 1.0), 6.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	breathe.tween_property(glow, "scale", Vector2(1.12, 1.12), period * 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	breathe.tween_property(glow, "scale", Vector2.ONE, period * 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 ## A slow, subtle breathing scale + glow so the title reads as alive rather
 ## than a flat screenshot — same continuous-pulse idea FinishPodium already
@@ -165,12 +263,13 @@ func _start_title_pulse(title: Label) -> void:
 
 	# modulate multiplies the base font color, so a "brighter" glow needs
 	# channels ABOVE 1.0 — multiplying by COLOR_GOLD_BRIGHT's own (all <1.0)
-	# channels would darken it instead. Cool cyan-white bias (not warm amber)
-	# to match the neon palette's electric-cyan accent instead of the old
-	# brass/gold one.
+	# channels would darken it instead. Warm amber-white bias to match the
+	# "Racing Elegance" palette's brass/gold accent (reverted from the old
+	# "Neon Downs" cyan-white bias, which no longer matches now that
+	# COLOR_GOLD is warm again — see UITheme.gd's own palette comment).
 	var glow: Tween = create_tween()
 	glow.set_loops()
-	glow.tween_property(title, "modulate", Color(1.05, 1.3, 1.4), 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	glow.tween_property(title, "modulate", Color(1.4, 1.25, 1.0), 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	glow.tween_property(title, "modulate", Color.WHITE, 1.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 ## change_scene_to_file frees this TitleScreen node (the current scene) once
@@ -203,9 +302,12 @@ func _show_settings() -> void:
 	_add_volume_slider(content, "Sound Effects Volume", Settings.sfx_volume, Settings.set_sfx_volume)
 
 	_add_track_theme_picker(content)
-	_add_camera_mode_picker(content)
 
-	var fullscreen_check := CheckBox.new()
+	# CheckButton, not CheckBox — UITheme styles CheckButton (same toggle-chip
+	# look as the rest of this dialog); CheckBox draws from Godot's default
+	# engine check icon, which UITheme never overrides, so it would sit here
+	# as an unstyled default widget in an otherwise fully themed dialog.
+	var fullscreen_check := CheckButton.new()
 	fullscreen_check.text = "Fullscreen"
 	fullscreen_check.button_pressed = Settings.fullscreen
 	fullscreen_check.toggled.connect(Settings.set_fullscreen)
@@ -253,27 +355,6 @@ func _add_track_theme_picker(parent: Control) -> void:
 	var current_i: int = TrackThemes.THEME_IDS.find(Settings.track_theme_id)
 	option.select(max(current_i, 0))
 	option.item_selected.connect(func(index: int): Settings.set_track_theme_id(TrackThemes.THEME_IDS[index]))
-	row.add_child(option)
-
-## Camera mode also cycles live mid-race via the C key/gamepad Y button (see
-## RaceTrack3D._unhandled_input) — this picker just sets which mode a race
-## STARTS on, and stays in sync since both paths write through
-## Settings.set_camera_mode.
-func _add_camera_mode_picker(parent: Control) -> void:
-	var row := VBoxContainer.new()
-	row.add_theme_constant_override("separation", 2)
-	parent.add_child(row)
-
-	var label := Label.new()
-	label.text = "Camera (cycle mid-race with C / gamepad Y)"
-	row.add_child(label)
-
-	var option := OptionButton.new()
-	var modes: Array[String] = RaceTrack3D.CAMERA_MODE_ORDER
-	for mode in modes:
-		option.add_item(mode.capitalize())
-	option.select(max(modes.find(Settings.camera_mode), 0))
-	option.item_selected.connect(func(index: int): Settings.set_camera_mode(modes[index]))
 	row.add_child(option)
 
 ## Career/meta-progression summary — current class, lifetime totals, and
@@ -324,7 +405,8 @@ func _show_credits() -> void:
 		+ "Music: \"Calm Ambient 2 (Synthwave 15k)\" by The Cynic Project (OpenGameArt.org), CC0.\n\n" \
 		+ "Horse model: Quaternius (quaternius.com), CC0.\n\n" \
 		+ "Sound effects: Kenney.nl, OpenGameArt.org, Freesound.org — all CC0.\n\n" \
-		+ "Typeface: Playfair Display by Claus Eggers Sørensen, SIL Open Font License 1.1."
+		+ "Typeface: Playfair Display by Claus Eggers Sørensen, SIL Open Font License 1.1.\n\n" \
+		+ "All wagering uses simulated in-game currency only — no real money can be bought, wagered, or won."
 	add_child(dialog)
 	dialog.popup_centered()
 	dialog.get_ok_button().grab_focus.call_deferred()

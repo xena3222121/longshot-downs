@@ -15,8 +15,29 @@ const NAMES: Array[String] = [
 	"Dusty Verdict", "Emberline", "Fickle Fortune", "Gravel Road Glory",
 	"Hollow Point Hank", "Ill-Advised", "Jackrabbit Jubilee", "Kite String",
 	"Long Shot Larry", "Muddy Waters", "No Refunds", "Overdraft",
-	"Pit Stop Preacher", "Quick Excuse", "Rowdy Receipt", "Static Cling",
-	"Tumbleweed Tony", "Undertow", "Vapor Trail", "Wager's Regret",
+	"Pit Stop Preacher", "Quick Excuse", "Rowdy Receipt", "Devin Is A Tool",
+	"Tumbleweed Tony", "Undertow", "Vapor Trail", "Devin's Flat Footed",
+]
+
+## Ordinary human names, deliberately plain next to NAMES' pun-heavy horse
+## names — real racing broadcasts always pair a jockey name with the horse,
+## and the contrast reads better than jokey names on both sides. Fixed 1:1
+## with NAMES by index (this horse's regular rider), not randomized per race
+## — matches Horse.gd's own "persistent identity" framing (see its header
+## comment) rather than introducing a second layer of per-race randomness.
+const JOCKEY_NAMES: Array[String] = [
+	"J. Alvarez", "M. Delgado", "R. Whitfield", "T. Okafor", "S. Marchetti",
+	"L. Beaumont", "K. Nakamura", "D. Fairweather", "P. Sokolov", "A. Kowalski",
+	"C. Vasquez", "E. Lindqvist", "N. Abernathy", "G. Petrov", "H. Duarte",
+	"W. Castellano", "B. Odom", "F. Nakashima", "V. Torrance", "Q. Reyes",
+	"O. Brennan", "I. Marsh", "U. Kimura", "Y. Solano", "Z. Whitcombe",
+	"J. Bellamy", "M. Ferraro", "R. Achebe", "T. Lindgren", "S. Okonkwo",
+	"L. Vance", "K. Delacroix", "D. Mbeki", "P. Harrow", "A. Ferreira",
+	"C. Nakagawa", "E. Whitlock", "N. Barros", "G. Sandoval", "H. Kessler",
+	"W. Adeyemi", "B. Larkspur", "F. Moreno", "V. Sundberg", "Q. Ashworth",
+	"O. Pemberton", "I. Yamada", "U. Castellanos", "Y. Marlowe", "Z. Odell",
+	"J. Kowalczyk", "M. Fontaine", "R. Osei", "T. Bramwell", "S. Iturbide",
+	"L. Ngata", "K. Ashford", "D. Villanueva", "P. Lindholm", "A. Okafor",
 ]
 
 ## Full persistent roster of 60 horses (name/id only). Silk colors aren't
@@ -30,6 +51,7 @@ static func generate() -> Array[Horse]:
 		var horse := Horse.new()
 		horse.id = i
 		horse.horse_name = NAMES[i]
+		horse.jockey_name = JOCKEY_NAMES[i]
 		horses.append(horse)
 	return horses
 

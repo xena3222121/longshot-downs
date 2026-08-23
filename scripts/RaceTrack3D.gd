@@ -73,6 +73,43 @@ const CAMERA_SHAKE_MAGNITUDE: float = 0.5 # world units of random jitter at peak
 const CAMERA_PUNCH_DURATION: float = 0.6
 const CAMERA_PUNCH_FOV_DELTA: float = -6.0 # negative = zoom in (lower FOV)
 
+## Automatic broadcast-style camera CUTS layered on top of the one chase-cam
+## rig above — AJ asked what a real TVG broadcast has that this doesn't, and
+## "one continuous pan for the whole race" was the single biggest tell versus
+## real coverage, which always cuts: a static wide gate shot, the chase cam
+## once running, one elevated cutaway at the far turn, a fixed low finish-line
+## camera for the stretch drive. Every non-CHASE shot below sets camera
+## position/look_at directly (no exponential smoothing) so the transition
+## reads as an instant CUT, the way a broadcast truck switches feeds, rather
+## than the camera physically flying across the track. camera_focus_fraction/
+## camera_look_target keep updating every frame regardless of which shot is
+## live (see _update_camera) specifically so CHASE never has to visibly "catch
+## up" once a cutaway ends.
+enum ShotState { GATE, CHASE, TURN_CUTAWAY, STRETCH }
+var _shot_state: ShotState = ShotState.GATE
+var _shot_state_time: float = 0.0
+var _did_turn_cutaway: bool = false # once-per-race latch, not re-armed until the next _build_scene()
+
+const GATE_SHOT_DURATION: float = 2.2 # holds even if a horse somehow jumps out to an early fractional lead
+## Pulled in from an earlier 34/15 — a first screenshot check showed the gate
+## reading as a tiny curb with the grandstand (much closer, on the infield
+## side near the same fraction) dominating the frame instead. Closer/lower,
+## similar proportions to the STRETCH shot's own successful framing, reads as
+## an actual establishing shot of the gate rather than a wide unrelated vista.
+const GATE_SHOT_BACK: float = 16.0
+const GATE_SHOT_HEIGHT: float = 7.0
+const GATE_SHOT_FOV_DELTA: float = 8.0 # wider than the chase cam's normal FOV — an establishing shot, not a close-up
+
+const TURN_CUTAWAY_START_FRACTION: float = 0.42 # far turn is the straight's mirror image, i.e. fraction 0.5
+const TURN_CUTAWAY_END_FRACTION: float = 0.58
+const TURN_CUTAWAY_DURATION: float = 2.5
+const TURN_CAM_BACK: float = 46.0
+const TURN_CAM_HEIGHT: float = 34.0 # a genuinely elevated "blimp/crane" angle, not just a taller chase cam
+
+const STRETCH_SHOT_START_FRACTION: float = 0.85
+const STRETCH_CAM_BACK: float = 9.0 # just outside the rail, near the finish line
+const STRETCH_CAM_HEIGHT: float = 6.0 # low, head-on, dramatic — the classic finish-line wire-cam angle
+
 var result: RaceResult
 var field: Array[Horse] = []
 var _bet_context: Dictionary = {} # see BroadcastHUD._build_bet_panel — what the player actually wagered on THIS race
@@ -92,6 +129,35 @@ var broadcast_hud: BroadcastHUD
 var announcer_director: RaceAnnouncerDirector
 var _was_big_surging: Array[bool] = []
 
+## Visible mechanical starting gate — horses used to just appear already
+## running, with nothing marking the actual moment of departure. Built the
+## same procedural-primitive way as the grandstand/rail (no imported assets,
+## no risk of guessing an imported model's scale/pivot wrong — see
+## _build_environment's own comment on why this project prefers that). One
+## hinge Node3D per lane (the door mesh is its child, offset to one side) so
+## "opening" is just rotating the hinge around Y — see _open_starting_gate.
+const GATE_HEIGHT: float = 2.6
+const GATE_DEPTH: float = 0.9
+const GATE_SETBACK: float = 0.6 # front face sits this far behind the actual start/finish line
+const GATE_FRAME_COLOR: Color = Color(0.5, 0.07, 0.07) # traditional starting-gate red
+const GATE_DOOR_COLOR: Color = Color(0.82, 0.82, 0.85)
+const GATE_DOOR_OPEN_ANGLE_DEG: float = 100.0
+const GATE_DOOR_OPEN_DURATION: float = 0.3
+## The gate is a "before the race" object, not a permanent track fixture like
+## the finish arch (_make_finish_arch below) — it fades out and is removed
+## once the field has visibly cleared it, rather than sitting in the scene
+## (out of frame for most of the race, but still technically present) the
+## whole time. Delay is measured from when the doors finish opening.
+const GATE_FADE_DELAY: float = 2.2
+const GATE_FADE_DURATION: float = 1.0
+
+var _gate_doors: Array[Node3D] = [] # hinge nodes, one per lane
+var _gate_world_center: Vector3 = Vector3.ZERO # what the GATE establishing shot looks at
+var _gate_root: Node3D
+var _gate_frame_mat: StandardMaterial3D
+var _gate_door_mat: StandardMaterial3D
+var _gate_fade_started: bool = false
+
 var _theme: Dictionary = {}
 var _venue_id: String = "" # "" = no venue set, single-race mode — falls back to Settings.track_theme_id exactly like before Venues existed
 
@@ -104,12 +170,19 @@ var _venue_id: String = "" # "" = no venue set, single-race mode — falls back 
 ## listening to.
 var has_audio_focus: bool = true
 
-func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, venue_id: String = "", p_has_audio_focus: bool = true) -> void:
+## AJ: "make it so they randomly race on turf or dirt" — decided once per
+## race by RaceScheduler._draw_field (see its own comment) and passed in
+## here; RaceTrack3D itself just renders whichever surface it's told rather
+## than deciding.
+var _is_turf: bool = false
+
+func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, venue_id: String = "", p_has_audio_focus: bool = true, p_is_turf: bool = false) -> void:
 	field = p_field
 	result = p_result
 	_bet_context = bet_context
 	_venue_id = venue_id
 	has_audio_focus = p_has_audio_focus
+	_is_turf = p_is_turf
 	if venue_id != "":
 		var venue: Dictionary = Venues.get_venue(venue_id)
 		STRAIGHT_LEN = float(venue.get("straight_len", 140.0))
@@ -132,6 +205,7 @@ func set_audio_focus(focused: bool) -> void:
 			AudioManager.start_race_ambience()
 	else:
 		AudioManager.stop_race_ambience()
+		AudioManager.stop_crowd_swell()
 
 ## Pulls every color/light value this track's visuals depend on from either
 ## the active venue's own fixed theme (see Venues.gd — a real venue always
@@ -146,7 +220,12 @@ func _apply_theme() -> void:
 		theme_id = String(Venues.get_venue(_venue_id).get("theme_id", TrackThemes.DEFAULT_THEME_ID))
 	_theme = TrackThemes.get_theme(theme_id)
 	RAIL_COLOR = _theme.rail_color
-	TRACK_SURFACE_COLOR = _theme.track_surface_color
+	# Turf is literally the same grass as the infield in real life — reusing
+	# the theme's own infield_color rather than inventing a separate turf
+	# constant keeps a turf race's surface color consistent with that same
+	# theme's grass mood (bluegrass_night's turf reads differently from
+	# desert_dusk's, same as their infields already do).
+	TRACK_SURFACE_COLOR = _theme.infield_color if _is_turf else _theme.track_surface_color
 	INFIELD_COLOR = _theme.infield_color
 	FLOODLIGHT_COLOR = _theme.floodlight_color
 	FLOODLIGHT_ENERGY = _theme.floodlight_energy
@@ -181,6 +260,7 @@ func _build_scene() -> void:
 	_apply_theme()
 	_build_lighting()
 	_build_track_visual()
+	_build_starting_gate()
 	_build_environment()
 	_build_camera()
 
@@ -190,7 +270,7 @@ func _build_scene() -> void:
 
 	broadcast_hud = BroadcastHUD.new()
 	add_child(broadcast_hud)
-	broadcast_hud.setup(field, result, _bet_context, STRAIGHT_LEN, INNER_RADIUS, venue_label)
+	broadcast_hud.setup(field, result, _bet_context, STRAIGHT_LEN, INNER_RADIUS, venue_label, _is_turf)
 
 	announcer_director = RaceAnnouncerDirector.new()
 	announcer_director.setup(field, broadcast_hud)
@@ -203,7 +283,6 @@ func _build_scene() -> void:
 	# generic focus-based gate) — visible_without_focus=true is what keeps
 	# these shown here.
 	InputHints.set_context_hints([
-		{"button": "Y", "ps_button": "△", "label": "Camera View"},
 		{"button": "R-Stick/RT-LT", "ps_button": "R-Stick/R2-L2", "label": "Look/Zoom"},
 	], true)
 
@@ -215,7 +294,7 @@ func _build_scene() -> void:
 
 		var marker := HorseMarker3D.new()
 		add_child(marker)
-		marker.setup(horse.silk_primary, horse.silk_secondary)
+		marker.setup(horse.silk_primary, horse.silk_secondary, horse.id, i + 1)
 		marker.position = start_pos
 		if start_pos.distance_to(ahead_pos) > 0.0001:
 			marker.look_at(global_position + ahead_pos, Vector3.UP)
@@ -268,22 +347,44 @@ func _build_lighting() -> void:
 	sun.light_color = _theme.sun_color
 	sun.light_energy = _theme.sun_energy
 	sun.shadow_enabled = true
+	# light_angular_distance simulates a real sun's apparent size, softening
+	# shadow edges instead of the razor-sharp default (a hard-edged shadow is
+	# one of the fastest "cheap 3D" tells) — directional_shadow_max_distance
+	# bumped past its 100m default since the skyline ring alone sits well
+	# past that (outer_radius + SKYLINE_RADIUS_MARGIN, see _build_skyline),
+	# which was clipping the far skyline's own shadows.
+	sun.light_angular_distance = 0.5
+	sun.directional_shadow_max_distance = 300.0
 	add_child(sun)
-	_build_moon(sun)
+
+	var hdri_texture: Texture2D = _get_cached_texture(String(_theme.get("sky_hdri", "")))
+	if hdri_texture == null:
+		_build_moon(sun) # the procedural sky has no real sun disc of its own to explain the DirectionalLight3D — see _build_moon's own comment. A real HDRI already shows its own sun, so this only applies to the procedural fallback.
 
 	_build_floodlights()
 
 	var env_node := WorldEnvironment.new()
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
-	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = _theme.sky_top
-	sky_material.sky_horizon_color = _theme.sky_horizon
-	sky_material.ground_bottom_color = _theme.ground_bottom
-	sky_material.ground_horizon_color = _theme.ground_horizon
-	sky_material.sky_curve = 0.15 # keeps most of the dome close to its top color instead of washing out toward the horizon
 	var sky := Sky.new()
-	sky.sky_material = sky_material
+	if hdri_texture != null:
+		# Real CC0 photographed sky (see TrackThemes' per-theme "sky_hdri" key)
+		# — this is the single highest-leverage realism swap available without
+		# new 3D art: a procedural gradient dome reads as a render immediately,
+		# a real photographed sky doesn't. Graceful fallback to the existing
+		# procedural sky_material below if the file's missing, same pattern as
+		# HorseMarker3D falling back to a placeholder when horse.glb is absent.
+		var panorama := PanoramaSkyMaterial.new()
+		panorama.panorama = hdri_texture
+		sky.sky_material = panorama
+	else:
+		var sky_material := ProceduralSkyMaterial.new()
+		sky_material.sky_top_color = _theme.sky_top
+		sky_material.sky_horizon_color = _theme.sky_horizon
+		sky_material.ground_bottom_color = _theme.ground_bottom
+		sky_material.ground_horizon_color = _theme.ground_horizon
+		sky_material.sky_curve = 0.15 # keeps most of the dome close to its top color instead of washing out toward the horizon
+		sky.sky_material = sky_material
 	env.sky = sky
 	# Deliberately NOT sky-sourced ambient: at night the sky itself is
 	# near-black, and floodlight pools only cover part of the track (see
@@ -314,6 +415,28 @@ func _build_lighting() -> void:
 	env.ssao_intensity = 1.4
 	env.ssil_enabled = true
 
+	# Screen-space reflections — mostly subtle (the track/grass materials are
+	# fairly rough), but it's what puts a real sheen on the rail trim, the
+	# floodlight-lit horse coats, and the finish line's checkered tiles
+	# instead of everything reading as flat matte plastic.
+	env.ssr_enabled = true
+	env.ssr_max_steps = 64
+
+	# A thin haze that scales with distance — sells real depth/scale on a
+	# track this size (skyline, distant grandstand) the way a flat, fogless
+	# render never quite does. AJ: a trailing horse — legitimately 10-30
+	# units farther from the camera than the leader in a spread-out field —
+	# was getting visibly swallowed by this at the original density/length.
+	# Spreading the same total haze over a much longer volumetric_fog_length
+	# (default 64) means it stays thin across the whole pack's depth range
+	# and only really thickens out toward the genuinely distant background
+	# (skyline/grandstand), not a horse merely running a bit further back.
+	env.volumetric_fog_enabled = true
+	env.volumetric_fog_density = 0.004
+	env.volumetric_fog_length = 220.0
+	env.volumetric_fog_albedo = _theme.ambient_color
+	env.volumetric_fog_gi_inject = 0.6
+
 	# Punchier, more "broadcast color grade" contrast/saturation than the
 	# tonemapper alone gives — cheap, engine-native alternative to a
 	# hand-authored color-grading LUT.
@@ -326,24 +449,9 @@ func _build_lighting() -> void:
 	add_child(env_node)
 
 	# The floodlights are angled ~32° down at the track surface for a good
-	# ground-level broadcast/jockey look — from straight overhead that's
-	# almost grazing incidence on a horse's back, so the overhead camera
-	# would otherwise read as near-black. A brighter duplicate Environment,
-	# assigned only to the camera while in overhead mode (see
-	# _apply_camera_environment), fixes that without touching how every
-	# other camera mode is lit.
-	_overhead_environment = env.duplicate()
-	# Absolute values, not a multiplier on the theme's own (often very dark —
-	# night/storm themes especially) ambient color: a relative boost was
-	# still nearly unreadable from directly overhead, since a small dark
-	# color times a few stays small. A bright, theme-independent flat fill
-	# guarantees the top-down read works the same in every theme. SSAO also
-	# gets disabled here — contact shadowing under near-flat top lighting
-	# just re-darkens the exact areas this is trying to brighten.
-	_overhead_environment.ambient_light_color = Color(0.85, 0.88, 0.92)
-	_overhead_environment.ambient_light_energy = 2.4
-	_overhead_environment.ssao_enabled = false
-	_overhead_environment.adjustment_brightness = 1.3
+	# ground-level broadcast look — the one camera this game has, so every
+	# lighting/post-processing choice above is tuned against exactly this
+	# angle and distance with nothing else to compromise for.
 
 ## Ring of SpotLight3Ds standing in for stadium light towers — angled inward
 ## and down at the track so their cones overlap over the racing surface
@@ -366,24 +474,45 @@ func _build_floodlights() -> void:
 		light.spot_angle = 32.0
 		light.spot_angle_attenuation = 1.6
 		light.shadow_enabled = i % 2 == 0 # alternating shadow casters — full ring of shadow lights is needlessly expensive
+		light.light_size = 0.5 # soft-edged shadow falloff instead of the hard default, matching the sun's light_angular_distance softening above
 		add_child(light) # must be in the tree before look_at — it needs a global transform to compute against
 		light.position = base_pos + Vector3(0.0, FLOODLIGHT_HEIGHT, 0.0)
 		light.look_at(target_pos, Vector3.UP)
 
 func _build_camera() -> void:
-	_camera_mode = Settings.camera_mode
 	camera = Camera3D.new()
 	camera.fov = camera_base_fov
 	add_child(camera)
-	_apply_camera_environment()
 
-	var outer_radius: float = _lane_radius(field.size() - 1) + RAIL_GAP
-	var rail_radius: float = outer_radius + CAMERA_RAIL_OFFSET
+	# Shallow depth of field — a real telephoto broadcast lens keeps the pack
+	# sharp and lets the grandstand/skyline behind them go soft, which reads
+	# as "real camera" rather than "everything in the scene is in focus" (a
+	# classic cheap-3D tell). DOF blur lives on CameraAttributes, not
+	# Environment, in Godot 4 — attached directly to this camera rather than
+	# WorldEnvironment. Distances are tuned against CAMERA_RAIL_OFFSET/
+	# CAMERA_HEIGHT (~24 units from camera to the pack) — background falloff
+	# starts well past that so the horses themselves are never at risk of
+	# blurring.
+	var attributes := CameraAttributesPractical.new()
+	attributes.dof_blur_far_enabled = true
+	attributes.dof_blur_far_distance = 45.0
+	attributes.dof_blur_far_transition = 25.0
+	attributes.dof_blur_amount = 0.08
+	camera.attributes = attributes
+
 	camera_focus_fraction = 0.0
 	camera_look_target = _sample_track(0.0, INNER_RADIUS * 0.5).position
-	camera.position = _sample_track(0.0, rail_radius).position + Vector3(0.0, CAMERA_HEIGHT, 0.0)
-	camera.look_at(camera_look_target, Vector3.UP)
 	camera.current = true
+
+	# Opens on the GATE establishing shot (see ShotState) rather than the old
+	# fixed chase-cam framing — _update_camera takes over every subsequent
+	# frame once _process starts running, this just makes the very first
+	# rendered frame (before any _process tick) already show the right shot
+	# instead of a one-frame flash of the old framing.
+	_shot_state = ShotState.GATE
+	_shot_state_time = 0.0
+	_did_turn_cutaway = false
+	_apply_camera_gate_shot()
 
 ## "Riders up... post time..." beat before the race actually starts —
 ## real broadcasts don't cut straight from the odds board to a running
@@ -391,20 +520,59 @@ func _build_camera() -> void:
 ## and the announcer's opening call at the exact moment `play()` starts
 ## ticking frames, instead of firing them the instant the track is built.
 func play_with_post_time() -> void:
+	await broadcast_hud.show_odds_board()
+	# AJ (later session): hearing both the riders-up bugle AND the gate bell
+	# in the same pre-race sequence read as "the horn firing twice" — he
+	# wants exactly ONE horn-family cue, timed to the actual gate-open
+	# moment (countdown reaching zero), not an earlier separate one at
+	# riders-up. Reversing the previous session's separate post_time_bugle
+	# call (its own comment history is above/superseded) in favor of that:
+	# race_start_bell below is now the ONLY such cue, fired once, exactly
+	# when the doors actually open. post_time_bugle.mp3 stays on disk
+	# unused, per this project's convention of not deleting shipped assets
+	# just because code stops referencing them.
 	await broadcast_hud.play_post_time_sequence()
 	if has_audio_focus:
 		AudioManager.play_sfx("race_start_bell")
 		AudioManager.play_sfx("horse_neigh")
 	InputHints.rumble(0.3, 0.55, 0.3) # gate-open thump, felt not just heard on a connected controller
+	_open_starting_gate() # synced to the same beat as the bell above, not the announcer's opening call
 	announcer_director.race_start()
 	play()
 
-func play() -> void:
+func play(start_offset: float = 0.0) -> void:
 	frame_index = 0
-	playback_time = 0.0
+	playback_time = start_offset
 	playing = true
+	if start_offset <= 0.01:
+		_shot_state = ShotState.GATE
+		_shot_state_time = 0.0
+		_did_turn_cutaway = false
+	else:
+		# Joining a race already in progress (see join_in_progress below) —
+		# the gate ceremony already happened off-screen, so open straight into
+		# CHASE and skip the once-per-race turn cutaway (an unrelated cutaway
+		# firing the instant someone tunes in would read as broken, not
+		# broadcast-authentic).
+		_shot_state = ShotState.CHASE
+		_did_turn_cutaway = true
+		_snap_starting_gate_open()
 	if has_audio_focus:
 		AudioManager.start_race_ambience()
+
+## Entry point for a screen assigned to a venue whose race is already
+## underway (see RaceScheduler.get_live_race) — AJ: "if im not watching it it
+## still runs and remains live until the race is over, if i choose to tune
+## in itll open at whatever part of the race its at." Skips the entire
+## pre-race ceremony play_with_post_time() runs (odds board, riders-up
+## countdown, gate SFX, announcer's opening call) since all of that already
+## "happened" during the time nobody was watching — seeking straight to
+## `elapsed` makes every frame from the very first one land wherever the
+## race actually is, no catch-up animation needed.
+func join_in_progress(elapsed: float) -> void:
+	if broadcast_hud != null:
+		broadcast_hud.show_commentary("Joining the race live, in progress...")
+	play(elapsed)
 
 func _process(delta: float) -> void:
 	if not playing or result == null or result.frames.is_empty():
@@ -431,6 +599,8 @@ func _process(delta: float) -> void:
 	_apply_gait_speeds(speeds)
 	_handle_surges(surges)
 	_update_camera(delta, fractions)
+	_update_crowd_swell(fractions)
+	_update_gate_fade(playback_time)
 	broadcast_hud.update(delta, playback_time, fractions)
 	announcer_director.update(delta, fractions)
 
@@ -438,6 +608,7 @@ func _process(delta: float) -> void:
 		playing = false
 		if has_audio_focus:
 			AudioManager.stop_race_ambience()
+			AudioManager.stop_crowd_swell()
 		announcer_director.on_finish(result)
 		InputHints.clear_context_hints() # the podium overlay's own buttons take over Select/Back next; camera hints no longer apply
 		playback_finished.emit()
@@ -546,6 +717,24 @@ func _handle_surges(surges: PackedFloat32Array) -> void:
 		elif surges[i] < BIG_SURGE_RESET_THRESHOLD:
 			_was_big_surging[i] = false
 
+const CROWD_SWELL_START_FRACTION: float = 0.8 # final ~20% of the race
+
+## Real broadcast crowd noise isn't flat — it builds into the stretch drive.
+## AudioManager.play_crowd_reaction (duels/photo-finish/podium) was already
+## discrete one-shots; this adds a continuous bed underneath that ramps up
+## smoothly with the leader's own progress, on top of whatever one-shot cues
+## fire during the same stretch. No-ops via has_audio_focus exactly like
+## every other continuous audio source this class drives (race ambience),
+## since only one simulcast screen ever holds audio focus at a time.
+func _update_crowd_swell(fractions: PackedFloat32Array) -> void:
+	if not has_audio_focus:
+		return
+	var leader_fraction: float = 0.0
+	for f in fractions:
+		leader_fraction = max(leader_fraction, f)
+	var t: float = clamp((leader_fraction - CROWD_SWELL_START_FRACTION) / (1.0 - CROWD_SWELL_START_FRACTION), 0.0, 1.0)
+	AudioManager.set_crowd_swell_intensity(t)
+
 ## One horse just started a big surge — a punchy camera shake / quick FOV
 ## zoom-in, both eased back out over CAMERA_SHAKE_DURATION/
 ## CAMERA_PUNCH_DURATION in _update_camera.
@@ -555,14 +744,7 @@ func _trigger_big_move(horse_index: int) -> void:
 	InputHints.rumble(0.15, 0.35, CAMERA_SHAKE_DURATION) # same window as the camera shake it's paired with
 	announcer_director.on_big_move(horse_index)
 
-## Three selectable camera rigs (see CAMERA_MODE_ORDER) sharing one dispatch
-## point — every _process caller (and the replay system) just calls
-## _update_camera and doesn't need to know which rig is active.
-const CAMERA_MODE_ORDER: Array[String] = ["broadcast", "overhead", "jockey"]
-var _camera_mode: String = "broadcast"
-var _overhead_environment: Environment
-
-## Right-stick "look around" + trigger zoom for the broadcast camera only —
+## Right-stick "look around" + trigger zoom for the broadcast camera —
 ## the broadcast rig is a dolly riding a virtual rail around the track (see
 ## _update_camera_broadcast), so the natural free-look control for THIS rig
 ## is nudging how far ahead of/behind the pack along that rail the camera
@@ -584,14 +766,12 @@ var _free_look_fraction_offset: float = 0.0
 var _free_look_height_offset: float = 0.0
 var _free_look_fov_offset: float = 0.0
 
-## Always runs (called once per frame from _update_camera before the mode
-## dispatch) so the offsets keep easing back to 0 even while a different
-## camera mode is active — without this, switching away from broadcast mid
-## stick-push would freeze the offsets at whatever they last were, then pop
-## visibly the instant the player cycles back to broadcast.
+## Always runs (called once per frame from _update_camera) so the offsets
+## ease back to 0 whenever no controller is connected instead of freezing at
+## whatever they last were.
 func _update_free_look(delta: float) -> void:
 	var joypads: Array = Input.get_connected_joypads()
-	if _camera_mode != "broadcast" or joypads.is_empty():
+	if joypads.is_empty():
 		var ease_t: float = 1.0 - exp(-delta * FREE_LOOK_EASE_SPEED)
 		_free_look_fraction_offset = lerp(_free_look_fraction_offset, 0.0, ease_t)
 		_free_look_height_offset = lerp(_free_look_height_offset, 0.0, ease_t)
@@ -617,52 +797,16 @@ func _update_free_look(delta: float) -> void:
 	_free_look_height_offset = lerp(_free_look_height_offset, target_height_offset, t)
 	_free_look_fov_offset = lerp(_free_look_fov_offset, target_fov_offset, t)
 
-## Only the overhead cam needs its own brighter Environment override (see
-## _build_lighting's _overhead_environment comment) — every other mode clears
-## the override back to null so it inherits the normal WorldEnvironment.
-func _apply_camera_environment() -> void:
-	camera.environment = _overhead_environment if _camera_mode == "overhead" else null
-
+## Dispatcher: keeps the smoothed chase-cam tracking state (camera_focus_
+## fraction/camera_look_target) current every frame regardless of which shot
+## is actually on screen — see the ShotState comment for why — then hands off
+## to whichever shot function is live. _update_shot_state runs the actual cut
+## logic (thresholds/timers) against the same avg_fraction computed here.
 func _update_camera(delta: float, fractions: PackedFloat32Array) -> void:
 	if camera == null:
 		return
 	_update_free_look(delta)
-	match _camera_mode:
-		"overhead":
-			_update_camera_overhead(delta, fractions)
-		"jockey":
-			_update_camera_jockey(delta, fractions)
-		_:
-			_update_camera_broadcast(delta, fractions)
 
-## Cycles BROADCAST -> OVERHEAD -> JOCKEY -> BROADCAST on the C key or the
-## controller's Y/Triangle button (checked directly by physical
-## keycode/joypad button rather than through a named InputMap action — this
-## project has no [input] section in project.godot yet, and hand-authoring
-## one as raw text risks a project.godot parse error that would break every
-## scene; a direct event check needs no project.godot changes at all).
-## Persists the choice via Settings so next race starts on whichever mode was
-## last used, and flashes the new mode's name through the existing
-## commentary caption instead of adding a whole new HUD element for it.
-func _unhandled_input(event: InputEvent) -> void:
-	var triggered: bool = (event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_C) \
-		or (event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_Y)
-	if not triggered:
-		return
-	var current_i: int = CAMERA_MODE_ORDER.find(_camera_mode)
-	_camera_mode = CAMERA_MODE_ORDER[(current_i + 1) % CAMERA_MODE_ORDER.size()]
-	Settings.set_camera_mode(_camera_mode)
-	_apply_camera_environment()
-	if broadcast_hud != null:
-		broadcast_hud.show_commentary("Camera: %s" % _camera_mode.capitalize())
-
-## Rides a virtual rail outside the track, tracking the pack's average
-## progress and centroid with exponential smoothing (frame-rate independent,
-## unlike a flat lerp factor) so the pan feels like a trackside broadcast
-## dolly rather than snapping straight to each frame's raw average. Camera
-## shake/punch-zoom (see _trigger_big_move) are layered on top of that base
-## position/FOV every frame, decaying linearly to zero over their duration.
-func _update_camera_broadcast(delta: float, fractions: PackedFloat32Array) -> void:
 	var avg_fraction: float = 0.0
 	var centroid: Vector3 = Vector3.ZERO
 	for i in range(horse_nodes.size()):
@@ -675,13 +819,88 @@ func _update_camera_broadcast(delta: float, fractions: PackedFloat32Array) -> vo
 	camera_focus_fraction = fposmod(lerp_angle(camera_focus_fraction * TAU, avg_fraction * TAU, t), TAU) / TAU
 	camera_look_target = camera_look_target.lerp(centroid, t)
 
+	_camera_shake_time = max(0.0, _camera_shake_time - delta)
+	_camera_punch_time = max(0.0, _camera_punch_time - delta)
+
+	_update_shot_state(delta, avg_fraction)
+
+	match _shot_state:
+		ShotState.GATE:
+			_apply_camera_gate_shot()
+		ShotState.TURN_CUTAWAY:
+			_apply_camera_turn_shot()
+		ShotState.STRETCH:
+			_apply_camera_stretch_shot()
+		_:
+			_apply_camera_chase_shot()
+
+## Pure state-machine step — no camera writes here, just deciding which shot
+## should be live this frame. Every transition is a hard CUT (see _cut_to),
+## never a blend between two shots' positions.
+func _update_shot_state(delta: float, avg_fraction: float) -> void:
+	_shot_state_time += delta
+	match _shot_state:
+		ShotState.GATE:
+			if _shot_state_time >= GATE_SHOT_DURATION or avg_fraction > 0.02:
+				_cut_to(ShotState.CHASE)
+		ShotState.TURN_CUTAWAY:
+			if _shot_state_time >= TURN_CUTAWAY_DURATION or avg_fraction > TURN_CUTAWAY_END_FRACTION:
+				_cut_to(ShotState.CHASE)
+		ShotState.CHASE:
+			if not _did_turn_cutaway and avg_fraction >= TURN_CUTAWAY_START_FRACTION and avg_fraction <= TURN_CUTAWAY_END_FRACTION:
+				_did_turn_cutaway = true
+				_cut_to(ShotState.TURN_CUTAWAY)
+			elif avg_fraction >= STRETCH_SHOT_START_FRACTION:
+				_cut_to(ShotState.STRETCH)
+		ShotState.STRETCH:
+			pass # holds through the finish; play_replay()/the podium take over from there
+
+func _cut_to(state: ShotState) -> void:
+	_shot_state = state
+	_shot_state_time = 0.0
+
+## Static wide establishing shot of the gate — see _build_starting_gate.
+func _apply_camera_gate_shot() -> void:
+	var outer_radius: float = _lane_radius(max(horse_nodes.size(), field.size()) - 1) + RAIL_GAP
+	camera.position = _sample_track(-0.01, outer_radius + GATE_SHOT_BACK).position + Vector3(0.0, GATE_SHOT_HEIGHT, 0.0)
+	camera.fov = camera_base_fov + GATE_SHOT_FOV_DELTA
+	camera.look_at(_gate_world_center, Vector3.UP)
+
+## Elevated "blimp" cutaway at the far turn — a genuinely different angle
+## (much higher, much further back) rather than just a taller chase cam, so
+## it reads as a broadcast truck switching to a second camera, not the same
+## shot zoomed out. Still tracks camera_look_target (the smoothed pack
+## centroid) so the pack stays framed even though the camera itself is fixed
+## out at the turn rather than riding along with them.
+func _apply_camera_turn_shot() -> void:
+	var outer_radius: float = _lane_radius(horse_nodes.size() - 1) + RAIL_GAP
+	camera.position = _sample_track(0.5, outer_radius + TURN_CAM_BACK).position + Vector3(0.0, TURN_CAM_HEIGHT, 0.0)
+	camera.fov = camera_base_fov
+	camera.look_at(camera_look_target, Vector3.UP)
+
+## Fixed low finish-line "wire cam" for the stretch drive — position never
+## moves once this shot is live, only the look_at pans/tilts to track the
+## approaching pack, exactly like a real fixed finish-line camera.
+func _apply_camera_stretch_shot() -> void:
+	var outer_radius: float = _lane_radius(horse_nodes.size() - 1) + RAIL_GAP
+	camera.position = _sample_track(0.03, outer_radius + STRETCH_CAM_BACK).position + Vector3(0.0, STRETCH_CAM_HEIGHT, 0.0)
+	camera.fov = camera_base_fov
+	camera.look_at(camera_look_target, Vector3.UP)
+
+## The original broadcast dolly cam: rides a virtual rail outside the track,
+## tracking the pack's average progress and centroid with exponential
+## smoothing (frame-rate independent, unlike a flat lerp factor) so the pan
+## feels like a trackside dolly rather than snapping straight to each frame's
+## raw average. Camera shake/punch-zoom (see _trigger_big_move) and free-look
+## are layered on top of that base position/FOV every frame, decaying
+## linearly to zero over their duration — deliberately NOT applied to the
+## other three shots above, since a shake/zoom on a fixed broadcast cutaway
+## would read as a camera operator problem rather than an in-race moment.
+func _apply_camera_chase_shot() -> void:
 	var outer_radius: float = _lane_radius(horse_nodes.size() - 1) + RAIL_GAP
 	var rail_radius: float = outer_radius + CAMERA_RAIL_OFFSET
 	var rail_fraction: float = camera_focus_fraction + _free_look_fraction_offset
 	var base_position: Vector3 = _sample_track(rail_fraction, rail_radius).position + Vector3(0.0, CAMERA_HEIGHT + _free_look_height_offset, 0.0)
-
-	_camera_shake_time = max(0.0, _camera_shake_time - delta)
-	_camera_punch_time = max(0.0, _camera_punch_time - delta)
 
 	var shake_strength: float = _camera_shake_time / CAMERA_SHAKE_DURATION
 	var shake_offset: Vector3 = Vector3(
@@ -692,66 +911,6 @@ func _update_camera_broadcast(delta: float, fractions: PackedFloat32Array) -> vo
 	camera.fov = camera_base_fov + CAMERA_PUNCH_FOV_DELTA * punch_strength + _free_look_fov_offset
 
 	camera.position = base_position + shake_offset
-	camera.look_at(camera_look_target, Vector3.UP)
-
-const OVERHEAD_HEIGHT: float = 55.0
-const OVERHEAD_SMOOTH_SPEED: float = 4.0
-
-## Straight-down blimp/minimap-style shot tracking the pack's centroid — a
-## totally different read on the same race than the broadcast dolly, good
-## for seeing the whole field's spacing at a glance.
-func _update_camera_overhead(delta: float, fractions: PackedFloat32Array) -> void:
-	var centroid: Vector3 = Vector3.ZERO
-	for node in horse_nodes:
-		centroid += node.position
-	centroid /= horse_nodes.size()
-
-	var t: float = 1.0 - exp(-delta * OVERHEAD_SMOOTH_SPEED)
-	camera_look_target = camera_look_target.lerp(centroid, t)
-	# The tiny Z nudge keeps the camera from ever sitting EXACTLY above
-	# camera_look_target — Node3D.look_at degenerates (forward and up vectors
-	# collinear) when the camera is perfectly vertical over its target.
-	var target_position: Vector3 = camera_look_target + Vector3(0.0, OVERHEAD_HEIGHT, 0.0001)
-	camera.position = camera.position.lerp(target_position, t)
-	camera.fov = camera_base_fov
-	camera.look_at(camera_look_target, Vector3.UP)
-
-const JOCKEY_HEIGHT_MARGIN: float = 0.5 # clearance ABOVE the model's own measured highest point — see HorseMarker3D.get_top_y()
-const JOCKEY_MOUNT_OFFSET: float = 0.5 # FORWARD of the horse's own origin, near the withers/shoulders where a jockey actually sits — was a negative (behind) offset when this was a chase cam
-const JOCKEY_LOOK_AHEAD: float = 14.0
-const JOCKEY_LOOK_HEIGHT_LIFT: float = 0.3 # look slightly ABOVE camera height, not down at the ground/track surface
-const JOCKEY_SMOOTH_SPEED: float = 6.0
-const JOCKEY_FOV: float = 70.0 # wider than the broadcast cam's 50 — right up in it, GoPro-on-the-jockey visceral
-
-## Mounted POV — sits where a jockey actually would (on the leading horse's
-## back, near the withers, looking forward over its head/neck down the
-## track) rather than trailing behind it like a chase cam looking at its
-## hindquarters (the old rig). Uses the leader HorseMarker3D's own facing
-## (local +Z is "behind", per HorseMarker3D's own look_at convention) rather
-## than re-deriving a heading from track fractions, so it banks naturally
-## through the turns exactly the way the horse models themselves do. Camera
-## height comes from HorseMarker3D.get_top_y() (the model's actual measured
-## geometry) rather than a guessed constant — two guessed constants in a row
-## (1.9, then 2.5) landed too low/clipping into the model, since there was no
-## way to visually verify either without AJ testing live.
-func _update_camera_jockey(delta: float, fractions: PackedFloat32Array) -> void:
-	var leader_i: int = 0
-	var leader_progress: float = -INF
-	for i in range(fractions.size()):
-		if fractions[i] > leader_progress:
-			leader_progress = fractions[i]
-			leader_i = i
-
-	var leader: HorseMarker3D = horse_nodes[leader_i]
-	var forward: Vector3 = -leader.global_transform.basis.z.normalized()
-	var camera_height: float = leader.get_top_y() + JOCKEY_HEIGHT_MARGIN
-	var target_position: Vector3 = leader.global_position + forward * JOCKEY_MOUNT_OFFSET + Vector3(0.0, camera_height, 0.0)
-	var target_look: Vector3 = leader.global_position + forward * JOCKEY_LOOK_AHEAD + Vector3(0.0, camera_height + JOCKEY_LOOK_HEIGHT_LIFT, 0.0)
-
-	var t: float = 1.0 - exp(-delta * JOCKEY_SMOOTH_SPEED)
-	camera.position = camera.position.lerp(target_position, t)
-	camera_look_target = camera_look_target.lerp(target_look, t)
-	camera.fov = JOCKEY_FOV
 	camera.look_at(camera_look_target, Vector3.UP)
 
 ## Samples a stadium curve of the given `radius` at lap `fraction` (0..1,
@@ -822,11 +981,150 @@ func _build_track_visual() -> void:
 	var infield_radius: float = INNER_RADIUS - RAIL_GAP
 	var outer_radius: float = _lane_radius(field.size() - 1) + RAIL_GAP
 
-	add_child(_make_fan_mesh(_track_loop_points(infield_radius), INFIELD_COLOR, 0.95, _get_grass_detail_texture()))
-	add_child(_make_ring_mesh(_track_loop_points(infield_radius), _track_loop_points(outer_radius), TRACK_SURFACE_COLOR, 0.85, _get_dirt_detail_texture()))
+	var grass: Dictionary = _ground_surface_textures("grass", INFIELD_COLOR, _get_grass_detail_texture(), _get_grass_normal_texture())
+	var dirt: Dictionary = _ground_surface_textures("dirt", TRACK_SURFACE_COLOR, _get_dirt_detail_texture(), _get_dirt_normal_texture())
+	# Full effect from a real roughness map when one's present; the original
+	# flat scalar otherwise (a real map's own values already ARE the surface's
+	# roughness, so multiplying by anything less than 1.0 would just mute it).
+	var grass_roughness: float = 1.0 if grass.roughness != null else 0.95
+	var dirt_roughness: float = 1.0 if dirt.roughness != null else 0.85
+
+	add_child(_make_fan_mesh(_track_loop_points(infield_radius), grass.tint, grass_roughness, grass.albedo, grass.normal, grass.roughness))
+	add_child(_make_ring_mesh(_track_loop_points(infield_radius), _track_loop_points(outer_radius), dirt.tint, dirt_roughness, dirt.albedo, dirt.normal, dirt.roughness))
 	add_child(_make_rail_mesh(_track_loop_points(infield_radius), RAIL_HEIGHT, RAIL_COLOR, 0.35))
 	add_child(_make_rail_mesh(_track_loop_points(outer_radius), RAIL_HEIGHT, RAIL_COLOR, 0.35))
 	add_child(_make_finish_line(infield_radius, outer_radius))
+	add_child(_make_finish_arch(infield_radius, outer_radius))
+
+## A visible mechanical gate at the start/finish line — see the _gate_doors
+## class comment. Sits on the STRAIGHT segment (fraction ~0), so this uses
+## _make_finish_line's own direct-coordinate approach (x/z computed straight
+## from STRAIGHT_LEN/radius, no _sample_track call) rather than trying to
+## thread a small negative fraction through the stadium curve math — exact
+## and simple, since the gate never needs to sit anywhere but flat across the
+## straight.
+func _build_starting_gate() -> void:
+	_gate_doors.clear()
+	_gate_fade_started = false
+	var infield_radius: float = INNER_RADIUS - RAIL_GAP
+	var outer_radius: float = _lane_radius(field.size() - 1) + RAIL_GAP
+	var half: float = STRAIGHT_LEN * 0.5
+	var gate_x: float = -half - GATE_SETBACK - GATE_DEPTH * 0.5
+	var span: float = outer_radius - infield_radius
+
+	_gate_root = Node3D.new()
+	_gate_root.name = "StartingGate"
+	add_child(_gate_root)
+
+	_gate_world_center = Vector3(gate_x, GATE_HEIGHT * 0.5, infield_radius + span * 0.5)
+
+	_gate_frame_mat = _make_material(GATE_FRAME_COLOR, 0.4)
+	_gate_door_mat = _make_material(GATE_DOOR_COLOR, 0.5)
+	# Both need per-instance alpha tweening later (see _fade_out_starting_gate)
+	# — StandardMaterial3D doesn't blend alpha at all unless transparency is
+	# explicitly turned on, regardless of what the albedo color's own alpha
+	# channel says.
+	_gate_frame_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_gate_door_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+
+	var beam := MeshInstance3D.new()
+	beam.mesh = BoxMesh.new()
+	beam.mesh.size = Vector3(GATE_DEPTH, 0.25, span + 0.4)
+	beam.material_override = _gate_frame_mat
+	beam.position = Vector3(gate_x, GATE_HEIGHT, infield_radius + span * 0.5)
+	_gate_root.add_child(beam)
+
+	for end_z in [infield_radius - 0.2, outer_radius + 0.2]:
+		var post := MeshInstance3D.new()
+		post.mesh = BoxMesh.new()
+		post.mesh.size = Vector3(GATE_DEPTH, GATE_HEIGHT, 0.2)
+		post.material_override = _gate_frame_mat
+		post.position = Vector3(gate_x, GATE_HEIGHT * 0.5, end_z)
+		_gate_root.add_child(post)
+
+	# One swinging "saloon door" per lane, alternating which side it hinges
+	# from so neighboring doors swing away from each other rather than all
+	# sweeping the same direction and overlapping mid-open (see
+	# _gate_open_angle for the matching rotation-sign derivation).
+	for i in range(field.size()):
+		var lane_center: float = _lane_radius(i)
+		var door_width: float = LANE_GAP * 0.88
+		var hinge_sign: float = 1.0 if i % 2 == 0 else -1.0
+
+		var hinge := Node3D.new()
+		hinge.position = Vector3(gate_x, 0.0, lane_center - hinge_sign * door_width * 0.5)
+		_gate_root.add_child(hinge)
+
+		var door := MeshInstance3D.new()
+		door.mesh = BoxMesh.new()
+		door.mesh.size = Vector3(0.05, GATE_HEIGHT, door_width)
+		door.material_override = _gate_door_mat
+		door.position = Vector3(0.0, GATE_HEIGHT * 0.5, hinge_sign * door_width * 0.5)
+		hinge.add_child(door)
+
+		_gate_doors.append(hinge)
+
+## Rotating a hinge by +angle around Y swings a door whose local Z offset is
+## positive toward +X (the direction of travel, per _sample_track: fraction
+## increasing along the straight increases X) — so a door hinged with
+## hinge_sign=+1 needs +angle to swing forward, and hinge_sign=-1 needs
+## -angle for the same forward swing. Used by the tweened open (see
+## _open_starting_gate) — joining a race already in progress skips this
+## entirely and just removes the gate outright (_snap_starting_gate_open).
+func _gate_open_angle(lane_index: int) -> float:
+	var hinge_sign: float = 1.0 if lane_index % 2 == 0 else -1.0
+	return hinge_sign * deg_to_rad(GATE_DOOR_OPEN_ANGLE_DEG)
+
+## Tweened open, timed to the gate bell — see play_with_post_time(). Also
+## kicks off the delayed fade/removal below, since "doors just opened" is the
+## only moment this needs to be scheduled from.
+func _open_starting_gate() -> void:
+	for i in range(_gate_doors.size()):
+		var tw: Tween = create_tween()
+		tw.tween_property(_gate_doors[i], "rotation:y", _gate_open_angle(i), GATE_DOOR_OPEN_DURATION) \
+			.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+
+## AJ: the gate structure should read as "before the race" scenery, not a
+## permanent fixture like the finish arch — fades to transparent and is freed
+## once the field has had time to visibly clear it, rather than sitting in
+## the background (mostly out of frame after the camera cuts away, but still
+## technically present) for the rest of the race. Driven off `playback_time`
+## (see _process's call to this) rather than a real-world get_tree().
+## create_timer() coroutine on purpose: SceneTree timers here run on actual
+## wall-clock time regardless of Engine.time_scale (see
+## racetrack_playback_check.gd's own comment on this exact quirk), so a
+## timer-based fade left this coroutine still suspended — and its Tween/
+## material refs still alive — when a time_scale-compressed test race
+## finished and quit() before the real-world delay had elapsed, showing up as
+## a genuine "resources still in use at exit" leak. Gating on playback_time
+## instead scales correctly with everything else this class already ties to
+## the race clock (shot cuts, crowd swell), and can never outlive the node
+## that owns it.
+func _update_gate_fade(current_time: float) -> void:
+	if _gate_fade_started or _gate_root == null:
+		return
+	if current_time < GATE_DOOR_OPEN_DURATION + GATE_FADE_DELAY:
+		return
+	_gate_fade_started = true
+	var tw: Tween = create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(_gate_frame_mat, "albedo_color:a", 0.0, GATE_FADE_DURATION)
+	tw.tween_property(_gate_door_mat, "albedo_color:a", 0.0, GATE_FADE_DURATION)
+	tw.chain().tween_callback(_free_gate_root)
+
+func _free_gate_root() -> void:
+	if _gate_root != null and is_instance_valid(_gate_root):
+		_gate_root.queue_free()
+	_gate_root = null
+
+## Used when joining a race already underway (see play()) — the gate already
+## opened (and, realistically, already faded) off-screen before anyone tuned
+## in, so this just removes it outright rather than animating anything nobody
+## would see anyway.
+func _snap_starting_gate_open() -> void:
+	if _gate_root != null and is_instance_valid(_gate_root):
+		_gate_root.queue_free()
+	_gate_root = null
 
 ## Original, entirely procedural scenery (no imported/licensed assets —
 ## every shape below is a primitive mesh sized against constants already
@@ -936,7 +1234,68 @@ const SPECTATOR_COLORS: Array[Color] = [
 	Color(0.28, 0.22, 0.2), Color(0.25, 0.28, 0.24), Color(0.32, 0.32, 0.34),
 ]
 
+## Real film/broadcast productions fill background stands the same way:
+## flat cutout cards painted with many people, not individually modeled
+## extras — reads as a genuinely denser, more convincing crowd than discrete
+## capsule "people" at similar or lower cost (a handful of billboarded quads
+## vs. 45 separate small meshes). Texture is procedurally generated (see
+## scripts/tools/generate_crowd_billboard.gd) rather than a sourced photo —
+## avoids any license-verification risk, and at the distance a broadcast
+## camera ever actually sees the grandstand from, a painted card and a photo
+## cutout read almost identically anyway. Falls back to the original capsule
+## standees (_build_spectators_legacy) if that PNG is ever missing, same
+## graceful-fallback pattern as HorseMarker3D/horse.glb.
+const CROWD_BILLBOARD_PATH: String = "res://assets/textures/crowd_billboard.png"
+const CROWD_CARD_WIDTH: float = 7.0
+const CROWD_CARD_HEIGHT: float = 2.2 # matches the generated texture's ~3.2:1 aspect
+const CROWD_CARD_COUNT: int = 10
+
+func _make_billboard_material(texture: Texture2D) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = texture
+	# Scissor, not blend — these cards never need soft/antialiased edges (the
+	# generated texture's shapes are hard-edged anyway), and scissor avoids
+	# any transparency sort-order fighting between overlapping cards or with
+	# the grandstand/rail behind them.
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	mat.alpha_scissor_threshold = 0.5
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.roughness = 1.0
+	return mat
+
 func _build_spectators(infield_radius: float) -> void:
+	var texture: Texture2D = _get_cached_texture(CROWD_BILLBOARD_PATH)
+	if texture == null:
+		_build_spectators_legacy(infield_radius)
+		return
+
+	var mesh_instance := MultiMeshInstance3D.new()
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	var quad := QuadMesh.new()
+	quad.size = Vector2(CROWD_CARD_WIDTH, CROWD_CARD_HEIGHT)
+	quad.material = _make_billboard_material(texture)
+	multimesh.mesh = quad
+	multimesh.instance_count = CROWD_CARD_COUNT
+
+	# Same placement footprint as the old capsule cluster (just inside the
+	# infield rail, centered on the grandstand's own fraction) — a row of
+	# overlapping-enough cards spanning that same arc instead of a scatter of
+	# individual points.
+	var cluster_radius: float = infield_radius - 1.2
+	for i in range(CROWD_CARD_COUNT):
+		var t: float = float(i) / float(max(CROWD_CARD_COUNT - 1, 1))
+		var frac: float = GRANDSTAND_FRACTION + lerp(-0.05, 0.05, t)
+		var pos: Vector3 = _sample_track(frac, cluster_radius).position
+		multimesh.set_instance_transform(i, Transform3D(Basis(), pos + Vector3(0.0, CROWD_CARD_HEIGHT * 0.5, 0.0)))
+
+	mesh_instance.multimesh = multimesh
+	add_child(mesh_instance)
+
+## Original capsule-standee crowd — kept as the fallback for
+## _build_spectators above if the billboard texture is ever missing.
+func _build_spectators_legacy(infield_radius: float) -> void:
 	var mesh_instance := MultiMeshInstance3D.new()
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
@@ -1127,6 +1486,49 @@ func _build_grandstand(infield_radius: float) -> void:
 		strut.material_override = _make_material(Color(0.08, 0.09, 0.11), 0.2)
 		stand.add_child(strut)
 
+	_build_grandstand_crowd(stand)
+
+const GRANDSTAND_CROWD_CARDS_PER_TIER: int = 3
+const GRANDSTAND_CROWD_CARD_WIDTH: float = 10.0
+const GRANDSTAND_CROWD_CARD_HEIGHT: float = 1.7
+
+## Every tier was previously bare chrome — an empty grandstand undercuts the
+## "real broadcast" read as much as an empty infield does. Same billboard
+## crowd-card technique/texture as _build_spectators, added as children of
+## `stand` (the same Node3D _build_grandstand already builds the tiers
+## under) so they automatically inherit the grandstand's own position — no
+## separate world-space placement math needed. No-ops gracefully (matching
+## _build_spectators' own fallback) if the billboard texture is missing;
+## unlike the infield crowd there's no capsule-standee equivalent for empty
+## tiers worth building, so this simply skips rather than substituting
+## something else.
+func _build_grandstand_crowd(stand: Node3D) -> void:
+	var texture: Texture2D = _get_cached_texture(CROWD_BILLBOARD_PATH)
+	if texture == null:
+		return
+
+	var mesh_instance := MultiMeshInstance3D.new()
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	var quad := QuadMesh.new()
+	quad.size = Vector2(GRANDSTAND_CROWD_CARD_WIDTH, GRANDSTAND_CROWD_CARD_HEIGHT)
+	quad.material = _make_billboard_material(texture)
+	multimesh.mesh = quad
+	multimesh.instance_count = GRANDSTAND_TIERS * GRANDSTAND_CROWD_CARDS_PER_TIER
+
+	var idx: int = 0
+	for tier in range(GRANDSTAND_TIERS):
+		var y: float = GRANDSTAND_TIER_HEIGHT * (float(tier) + 0.85) # near the top of the tier block, reads as seated above its front edge
+		var z_offset: float = -GRANDSTAND_TIER_DEPTH * 0.5 * float(tier) + GRANDSTAND_TIER_DEPTH * 0.3 # just behind that tier's own front trim edge
+		for c in range(GRANDSTAND_CROWD_CARDS_PER_TIER):
+			var t: float = float(c) / float(max(GRANDSTAND_CROWD_CARDS_PER_TIER - 1, 1))
+			var x: float = lerp(-GRANDSTAND_LENGTH * 0.5 + GRANDSTAND_CROWD_CARD_WIDTH * 0.5, GRANDSTAND_LENGTH * 0.5 - GRANDSTAND_CROWD_CARD_WIDTH * 0.5, t)
+			multimesh.set_instance_transform(idx, Transform3D(Basis(), Vector3(x, y, z_offset)))
+			idx += 1
+
+	mesh_instance.multimesh = multimesh
+	stand.add_child(mesh_instance)
+
 const FLAG_COUNT: int = 20
 const FLAG_RADIUS_MARGIN: float = 1.6 # beyond the outer rail
 const FLAG_POLE_HEIGHT: float = 2.6
@@ -1183,6 +1585,46 @@ func _make_flag_pole(color: Color) -> Node3D:
 ## blotchy pattern (too large a scale) or fine static-like noise (too small).
 const GROUND_TEXTURE_SCALE: float = 14.0
 
+## Generic path->Texture2D cache, shared by the ground PBR textures, the sky
+## HDRIs, and the crowd billboard below — same "load once, cache by name
+## (null cached too, so a missing file isn't re-`ResourceLoader.exists`-
+## checked every race), reuse forever" pattern AudioManager._sfx_cache
+## already established for optional audio assets. `null` in the cache means
+## "checked, confirmed missing" — every caller treats that as "fall back
+## gracefully," never as an error.
+static var _texture_cache: Dictionary = {}
+
+static func _get_cached_texture(path: String) -> Texture2D:
+	if _texture_cache.has(path):
+		return _texture_cache[path]
+	var tex: Texture2D = null
+	if not path.is_empty() and ResourceLoader.exists(path):
+		tex = load(path)
+	_texture_cache[path] = tex
+	return tex
+
+## Real CC0 PBR photo textures (Poly Haven/ambientCG — see ATTRIBUTION.md)
+## for the track's dirt/grass surfaces, replacing the original procedural
+## noise-based mottling with actual photographed ground detail — falls back
+## to that original noise texture (passed in as `noise_albedo`/`noise_normal`)
+## if the photo set is missing, same graceful-fallback pattern as
+## HorseMarker3D/horse.glb. A real photo already carries its own natural
+## color, so it gets a near-white tint (StandardMaterial3D always multiplies
+## albedo_texture * albedo_color) rather than the full saturated theme color
+## the noise texture needs — full theme color would double-tint/darken a
+## real photo, but a light tint still lets each theme's day/overcast/night
+## mood come through on top of the real texture.
+func _ground_surface_textures(name: String, theme_color: Color, noise_albedo: NoiseTexture2D, noise_normal: NoiseTexture2D) -> Dictionary:
+	var albedo: Texture2D = _get_cached_texture("res://assets/textures/%s/albedo.jpg" % name)
+	if albedo != null:
+		return {
+			"albedo": albedo,
+			"normal": _get_cached_texture("res://assets/textures/%s/normal.jpg" % name),
+			"roughness": _get_cached_texture("res://assets/textures/%s/roughness.jpg" % name),
+			"tint": Color.WHITE.lerp(theme_color, 0.2),
+		}
+	return {"albedo": noise_albedo, "normal": noise_normal, "roughness": null, "tint": theme_color}
+
 static var _dirt_detail_texture: NoiseTexture2D
 static var _grass_detail_texture: NoiseTexture2D
 
@@ -1201,6 +1643,42 @@ static func _get_grass_detail_texture() -> NoiseTexture2D:
 	if _grass_detail_texture == null:
 		_grass_detail_texture = _build_detail_texture(2, 0.1)
 	return _grass_detail_texture
+
+static var _dirt_normal_texture: NoiseTexture2D
+static var _grass_normal_texture: NoiseTexture2D
+
+## Real surface relief instead of a flat plane that only ever looks
+## textured from directly overhead — same noise-based approach as the
+## albedo detail textures above, but rendered as a tangent-space normal map
+## (NoiseTexture2D.as_normal_map) so the floodlights/sun actually pick out
+## bump detail at grazing broadcast-camera angles. Higher frequency than the
+## albedo variants (finer grain reads as "surface roughness," not the same
+## broad mottling already carried by albedo) and a separate noise seed so
+## the two don't look like one texture doing double duty.
+static func _get_dirt_normal_texture() -> NoiseTexture2D:
+	if _dirt_normal_texture == null:
+		_dirt_normal_texture = _build_normal_texture(11, 0.35, 4.0)
+	return _dirt_normal_texture
+
+static func _get_grass_normal_texture() -> NoiseTexture2D:
+	if _grass_normal_texture == null:
+		_grass_normal_texture = _build_normal_texture(12, 0.45, 2.5)
+	return _grass_normal_texture
+
+static func _build_normal_texture(noise_seed: int, frequency: float, bump_strength: float) -> NoiseTexture2D:
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	noise.seed = noise_seed
+	noise.frequency = frequency
+
+	var tex := NoiseTexture2D.new()
+	tex.noise = noise
+	tex.seamless = true
+	tex.as_normal_map = true
+	tex.bump_strength = bump_strength
+	tex.width = 256
+	tex.height = 256
+	return tex
 
 static func _build_detail_texture(noise_seed: int, frequency: float) -> NoiseTexture2D:
 	var noise := FastNoiseLite.new()
@@ -1226,7 +1704,7 @@ static func _build_detail_texture(noise_seed: int, frequency: float) -> NoiseTex
 ## the surface from within (visible even in unlit shadow) and, combined with
 ## _build_lighting's env.glow_enabled, blooms — this is what makes the rail/
 ## pylons/banners read as neon rather than just brightly painted.
-func _make_material(color: Color, roughness: float = 0.9, detail_texture: Texture2D = null, emission: Color = Color(0.0, 0.0, 0.0, 0.0), emission_energy: float = 1.0) -> StandardMaterial3D:
+func _make_material(color: Color, roughness: float = 0.9, detail_texture: Texture2D = null, emission: Color = Color(0.0, 0.0, 0.0, 0.0), emission_energy: float = 1.0, normal_texture: Texture2D = null, roughness_texture: Texture2D = null) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.albedo_texture = detail_texture # multiplies with albedo_color when set — null is a no-op, same as before
@@ -1236,6 +1714,11 @@ func _make_material(color: Color, roughness: float = 0.9, detail_texture: Textur
 		mat.emission_enabled = true
 		mat.emission = emission
 		mat.emission_energy_multiplier = emission_energy
+	if normal_texture != null:
+		mat.normal_enabled = true
+		mat.normal_texture = normal_texture
+	if roughness_texture != null:
+		mat.roughness_texture = roughness_texture # multiplies with the `roughness` scalar above, same relationship as albedo_texture*albedo_color
 	return mat
 
 ## Fills a convex loop (the stadium shape is convex) as a triangle fan from
@@ -1243,7 +1726,7 @@ func _make_material(color: Color, roughness: float = 0.9, detail_texture: Textur
 ## GROUND_TEXTURE_SCALE) so `detail_texture` tiles across the surface based
 ## on actual world position rather than reading as one flat, undefined color
 ## (SurfaceTool defaults every vertex to UV (0,0) if never explicitly set).
-func _make_fan_mesh(points: Array[Vector3], color: Color, roughness: float = 0.9, detail_texture: Texture2D = null) -> MeshInstance3D:
+func _make_fan_mesh(points: Array[Vector3], color: Color, roughness: float = 0.9, detail_texture: Texture2D = null, normal_texture: Texture2D = null, roughness_texture: Texture2D = null) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in range(points.size()):
@@ -1258,16 +1741,17 @@ func _make_fan_mesh(points: Array[Vector3], color: Color, roughness: float = 0.9
 		st.set_normal(Vector3.UP)
 		st.set_uv(Vector2(b.x, b.z) / GROUND_TEXTURE_SCALE)
 		st.add_vertex(b)
+	st.generate_tangents() # required for StandardMaterial3D.normal_texture to have any effect
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = st.commit()
-	mesh_instance.material_override = _make_material(color, roughness, detail_texture)
+	mesh_instance.material_override = _make_material(color, roughness, detail_texture, Color(0.0, 0.0, 0.0, 0.0), 1.0, normal_texture, roughness_texture)
 	return mesh_instance
 
 ## Fills the annulus between two same-length, same-parameterization loops
 ## (inner/outer at matching fractions) as a strip of quads — used for the
 ## dirt track surface between the infield and the outer rail. Same planar
 ## world-space UV approach as _make_fan_mesh above.
-func _make_ring_mesh(inner: Array[Vector3], outer: Array[Vector3], color: Color, roughness: float = 0.9, detail_texture: Texture2D = null) -> MeshInstance3D:
+func _make_ring_mesh(inner: Array[Vector3], outer: Array[Vector3], color: Color, roughness: float = 0.9, detail_texture: Texture2D = null, normal_texture: Texture2D = null, roughness_texture: Texture2D = null) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for i in range(inner.size()):
@@ -1282,9 +1766,10 @@ func _make_ring_mesh(inner: Array[Vector3], outer: Array[Vector3], color: Color,
 		st.set_normal(Vector3.UP); st.set_uv(uv_inner_i); st.add_vertex(inner[i])
 		st.set_normal(Vector3.UP); st.set_uv(uv_outer_j); st.add_vertex(outer[j])
 		st.set_normal(Vector3.UP); st.set_uv(uv_inner_j); st.add_vertex(inner[j])
+	st.generate_tangents() # required for StandardMaterial3D.normal_texture to have any effect
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = st.commit()
-	mesh_instance.material_override = _make_material(color, roughness, detail_texture)
+	mesh_instance.material_override = _make_material(color, roughness, detail_texture, Color(0.0, 0.0, 0.0, 0.0), 1.0, normal_texture, roughness_texture)
 	return mesh_instance
 
 ## A vertical ribbon standing on a loop — the boundary rail/fence. Emissive
@@ -1355,3 +1840,41 @@ func _make_finish_line(infield_radius: float, outer_radius: float) -> MeshInstan
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh_instance.material_override = mat
 	return mesh_instance
+
+const FINISH_ARCH_HEIGHT: float = 4.2 # well above a galloping horse's head — the field needs to visibly pass UNDER this, never clip it
+const FINISH_ARCH_POST_SIZE: float = 0.18
+const FINISH_ARCH_WIRE_THICKNESS: float = 0.07
+const FINISH_ARCH_POST_COLOR: Color = Color(0.82, 0.82, 0.85) # neutral white-metal — deliberately NOT the gate's red, see the gate/arch comment below
+
+## AJ: the finish line needs real vertical height — a wire the field passes
+## UNDER, like a real finish line — not just the flat checkered ground tile
+## above (_make_finish_line, kept as-is; real finish lines have both a
+## painted stripe on the track AND an overhead wire/arch). Also needs to read
+## as visually distinct from the starting gate (_build_starting_gate): this
+## is a permanent fixture that stays up the whole race, so it deliberately
+## does NOT reuse the gate's red-frame/white-door look or its fade-out
+## behavior — thin white posts, a slim continuously-glowing gold wire (reuses
+## UITheme.COLOR_GOLD, tying into the same broadcast-gold language as the
+## rail's own emissive glow) rather than the gate's opaque red/white boxes.
+func _make_finish_arch(infield_radius: float, outer_radius: float) -> Node3D:
+	var half: float = STRAIGHT_LEN * 0.5
+	var arch := Node3D.new()
+	arch.name = "FinishArch"
+
+	var post_mat: StandardMaterial3D = _make_material(FINISH_ARCH_POST_COLOR, 0.4)
+	for z in [infield_radius, outer_radius]:
+		var post := MeshInstance3D.new()
+		post.mesh = BoxMesh.new()
+		post.mesh.size = Vector3(FINISH_ARCH_POST_SIZE, FINISH_ARCH_HEIGHT, FINISH_ARCH_POST_SIZE)
+		post.material_override = post_mat
+		post.position = Vector3(-half, FINISH_ARCH_HEIGHT * 0.5, z)
+		arch.add_child(post)
+
+	var wire := MeshInstance3D.new()
+	wire.mesh = BoxMesh.new()
+	wire.mesh.size = Vector3(FINISH_ARCH_WIRE_THICKNESS, FINISH_ARCH_WIRE_THICKNESS, outer_radius - infield_radius + FINISH_ARCH_POST_SIZE)
+	wire.material_override = _make_material(Color.BLACK, 0.4, null, UITheme.COLOR_GOLD, 3.0)
+	wire.position = Vector3(-half, FINISH_ARCH_HEIGHT, infield_radius + (outer_radius - infield_radius) * 0.5)
+	arch.add_child(wire)
+
+	return arch

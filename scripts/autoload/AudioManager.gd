@@ -33,8 +33,12 @@ const RACE_MUSIC_DUCK_DB: float = -16.0
 const MUSIC_BUS: String = "Music"
 const SFX_BUS: String = "SFX"
 
+const CROWD_SWELL_MIN_DB: float = -40.0
+const CROWD_SWELL_MAX_DB: float = -6.0
+
 var _music_player: AudioStreamPlayer
 var _ambience_player: AudioStreamPlayer
+var _swell_player: AudioStreamPlayer
 var _sfx_cache: Dictionary = {} # sound name -> AudioStream, or null if missing (cached either way)
 
 var _race_duck_db: float = 0.0
@@ -147,6 +151,35 @@ func play_crowd_reaction(intensity: float) -> void:
 	player.finished.connect(player.queue_free)
 	add_child(player)
 	player.play()
+
+## Continuous crowd-noise bed that ramps up smoothly as the leader closes on
+## the finish, instead of only ever reacting at discrete moments (see
+## play_crowd_reaction above, which stays as-is for duels/photo-finishes).
+## Reuses the same crowd_cheer.mp3 asset, looped, with its volume driven every
+## frame by RaceTrack3D._update_crowd_swell — lazily starts the player on the
+## first non-zero intensity and stops it once intensity returns to 0 (race
+## finish, or audio focus lost) rather than keeping a silent stream running.
+func set_crowd_swell_intensity(intensity: float) -> void:
+	var clamped: float = clamp(intensity, 0.0, 1.0)
+	if clamped <= 0.001:
+		stop_crowd_swell()
+		return
+	if _swell_player == null:
+		_swell_player = AudioStreamPlayer.new()
+		_swell_player.bus = SFX_BUS
+		add_child(_swell_player)
+	if not _swell_player.playing:
+		var stream: AudioStream = _load_sound("crowd_cheer")
+		if stream == null:
+			return
+		_set_loop(stream, true)
+		_swell_player.stream = stream
+		_swell_player.play()
+	_swell_player.volume_db = lerp(CROWD_SWELL_MIN_DB, CROWD_SWELL_MAX_DB, clamped)
+
+func stop_crowd_swell() -> void:
+	if _swell_player != null and _swell_player.playing:
+		_swell_player.stop()
 
 func _set_loop(stream: AudioStream, p_loop: bool) -> void:
 	if stream is AudioStreamOggVorbis or stream is AudioStreamMP3:

@@ -13,7 +13,13 @@ extends CanvasLayer
 const TOP_N_SHOWN: int = 4 # the reference only shows a handful of current leaders, not the full field
 const CHIP_SIZE: float = 30.0
 const ROW_HEIGHT: float = 34.0
-const BOTTOM_BAR_HEIGHT: float = 150.0
+## Real bug caught via a screenshot (AJ: "make sure all the text is in the
+## screen i just saw some jank shit") — TOP_N_SHOWN=4 leaderboard rows need
+## 4*ROW_HEIGHT + 3*4px separation = 148px, but the old 150 height only left
+## a 124px content margin after the progress bar strip + top/bottom padding
+## (see _build_bottom_bar's margin.size calc) — the 4th row's text spilled
+## out past the bar's own background and toward the real screen edge.
+const BOTTOM_BAR_HEIGHT: float = 190.0
 const PROGRESS_BAR_HEIGHT: float = 6.0
 ## Real broadcast leaderboards don't flicker every frame when two horses are
 ## a hair apart — they settle on an order and hold it for a beat.
@@ -40,6 +46,7 @@ static var _race_number: int = 0
 var field: Array[Horse] = []
 var result: RaceResult
 var _venue_label: String = "LONGSHOT DOWNS"
+var _is_turf: bool = false
 var _straight_len: float = 140.0
 var _inner_radius: float = 26.0
 var _rows: Array[Control] = []
@@ -70,27 +77,57 @@ var _has_prev_leader_fraction: bool = false
 var _current_speed_kmh: float = 0.0
 var _leader_fraction: float = 0.0
 
-func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, straight_len: float = 140.0, inner_radius: float = 26.0, venue_label: String = "LONGSHOT DOWNS") -> void:
+func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, straight_len: float = 140.0, inner_radius: float = 26.0, venue_label: String = "LONGSHOT DOWNS", is_turf: bool = false) -> void:
 	field = p_field
 	result = p_result
 	_straight_len = straight_len
 	_inner_radius = inner_radius
 	_venue_label = venue_label
+	_is_turf = is_turf
 	_race_number += 1
 	_build(bet_context)
 
 func _build(bet_context: Dictionary = {}) -> void:
 	layer = 9 # above the 3D viewport
 
+	# The one place in the game where "watching a real broadcast" is most
+	# literal — a live race, not a menu — had no vignette/grain treatment at
+	# all despite TitleScreen getting one this same session. Same reusable
+	# UITheme.make_vignette_overlay() shader, added here first so the header/
+	# leaderboard/etc. below draw on top of it rather than under it. Works
+	# identically whether this HUD is the main full-window view (Main.gd) or
+	# one of TrackLobby's SubViewport tiles — CanvasLayers render within
+	# whichever Viewport they belong to either way.
+	add_child(UITheme.make_vignette_overlay())
+
 	_build_header()
 	_build_bottom_bar()
+	_build_network_bug()
 	_build_start_banner()
 	_build_commentary()
 	_build_countdown()
 	_build_bet_panel(bet_context)
 
+## Real broadcasts always carry a persistent low-opacity network watermark
+## somewhere on screen, independent of whatever else is happening in the
+## header/leaderboard — this game had branding text on TitleScreen's footer
+## (see UITheme/TitleScreen) but nothing during the actual race, the one
+## screen most literally "the broadcast." Sits just above the bottom bar's
+## top edge (not inside it — that bar is already at capacity per the
+## BOTTOM_BAR_HEIGHT comment above) so it never fights the leaderboard/clock
+## for space.
+func _build_network_bug() -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var bug := Label.new()
+	bug.text = "LONGSHOT DOWNS RACING NETWORK"
+	bug.add_theme_font_size_override("font_size", 12)
+	bug.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.4))
+	bug.position = Vector2(20.0, viewport_size.y - BOTTOM_BAR_HEIGHT - 22.0)
+	bug.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(bug)
+
 func _build_header() -> void:
-	var glass: PanelContainer = UITheme.make_glass_panel_container(14.0, Color(0.016, 0.027, 0.047, 0.55))
+	var glass: PanelContainer = UITheme.make_glass_panel_container(14.0, Color(UITheme.COLOR_BG, 0.55))
 	glass.position = Vector2(20.0, 16.0)
 	glass.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(glass)
@@ -119,6 +156,16 @@ func _build_header() -> void:
 	race_label.text = "RACE %d — %s" % [_race_number, Career.get_current_class().name]
 	race_row.add_child(race_label)
 
+	# Track condition/surface callout — real broadcasts always show this next
+	# to the venue name (dirt/turf, fast/muddy/firm); this game only ever
+	# raced on dirt before AJ asked for real turf/dirt variety, so there was
+	# nothing to show here at all until now.
+	var surface_chip := Label.new()
+	surface_chip.add_theme_font_size_override("font_size", 13)
+	surface_chip.add_theme_color_override("font_color", UITheme.COLOR_CREAM)
+	surface_chip.text = "  •  TURF" if _is_turf else "  •  DIRT"
+	race_row.add_child(surface_chip)
+
 	_build_live_indicator(race_row)
 
 ## Small pulsing red dot + "LIVE" text next to the race number.
@@ -143,6 +190,110 @@ func _build_live_indicator(parent: Control) -> void:
 	live_label.text = "LIVE"
 	_live_indicator.add_child(live_label)
 
+const ODDS_BOARD_FADE: float = 0.35
+const ODDS_BOARD_HOLD: float = 2.6
+
+## Full-field post-time odds board — real broadcasts always cut to this right
+## before "riders up," and it was the one piece of pre-race broadcast grammar
+## missing here entirely: the in-race leaderboard only ever shows the top
+## TOP_N_SHOWN=4 by running position, never every horse's odds together
+## before the field even loads into the gate. Awaited by
+## RaceTrack3D.play_with_post_time() BEFORE play_post_time_sequence() (the
+## "RIDERS UP"/countdown beat), so the two never overlap on screen — this
+## fades fully out before the countdown begins, matching real broadcast
+## pacing (tote board, then gate, then countdown) rather than cramming both
+## into the same beat. Built fresh each call rather than kept as a persistent
+## node since it only ever appears once, right before post time.
+func show_odds_board() -> void:
+	var board: PanelContainer = UITheme.make_glass_panel_container(14.0, Color(UITheme.COLOR_BG, 0.75))
+	board.modulate.a = 0.0
+	add_child(board)
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 22)
+	board.add_child(margin)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	margin.add_child(box)
+
+	var eyebrow := Label.new()
+	eyebrow.theme_type_variation = "EyebrowLabel"
+	eyebrow.text = "POST TIME ODDS — %s" % _venue_label
+	eyebrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(eyebrow)
+
+	for i in range(field.size()):
+		var horse: Horse = field[i]
+		var tier: Dictionary = result.field[i].tier
+		var entry_box := VBoxContainer.new()
+		entry_box.add_theme_constant_override("separation", 0)
+		box.add_child(entry_box)
+
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		entry_box.add_child(row)
+
+		var chip := Panel.new()
+		chip.custom_minimum_size = Vector2(22.0, 22.0)
+		var chip_style := StyleBoxFlat.new()
+		chip_style.bg_color = horse.silk_primary
+		chip_style.border_color = horse.silk_secondary
+		chip_style.set_border_width_all(2)
+		chip_style.set_corner_radius_all(6)
+		chip.add_theme_stylebox_override("panel", chip_style)
+		row.add_child(chip)
+
+		var number_label := Label.new()
+		number_label.text = "#%d" % (i + 1)
+		number_label.custom_minimum_size = Vector2(30.0, 0.0)
+		number_label.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.6))
+		row.add_child(number_label)
+
+		var name_label := Label.new()
+		name_label.text = horse.horse_name
+		name_label.custom_minimum_size = Vector2(180.0, 0.0)
+		row.add_child(name_label)
+
+		var odds_label := Label.new()
+		odds_label.text = tier.get("label", "")
+		odds_label.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
+		odds_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		odds_label.custom_minimum_size = Vector2(60.0, 0.0)
+		row.add_child(odds_label)
+
+		# Real tote/odds boards always pair jockey + recent form with the
+		# odds — this game had no jockey data or finish-history at all before
+		# now (see Horse.jockey_name / Career.get_horse_form_string). Blank
+		# form for a horse with no recorded finishes yet reads as "debut,"
+		# which is itself real racing-broadcast language, not a placeholder
+		# gap.
+		var detail_label := Label.new()
+		var form: String = Career.get_horse_form_string(horse.id)
+		detail_label.text = "    %s — Form: %s" % [horse.jockey_name, form if not form.is_empty() else "debut"]
+		detail_label.add_theme_font_size_override("font_size", 12)
+		detail_label.add_theme_color_override("font_color", Color(UITheme.COLOR_CREAM, 0.5))
+		entry_box.add_child(detail_label)
+
+	# Content-sized PanelContainer's final size isn't known until its children
+	# lay out — same "defer to resized" idiom _build_bet_panel already uses to
+	# right-align itself, here centering the whole board instead.
+	board.resized.connect(func():
+		var viewport: Viewport = get_viewport()
+		if viewport == null:
+			return
+		board.position = (viewport.get_visible_rect().size - board.size) * 0.5
+	)
+
+	var fade_in: Tween = create_tween()
+	fade_in.tween_property(board, "modulate:a", 1.0, ODDS_BOARD_FADE)
+	await get_tree().create_timer(ODDS_BOARD_FADE + ODDS_BOARD_HOLD).timeout
+	var fade_out: Tween = create_tween()
+	fade_out.tween_property(board, "modulate:a", 0.0, ODDS_BOARD_FADE)
+	await get_tree().create_timer(ODDS_BOARD_FADE).timeout
+	board.queue_free()
+
 ## Top-right "YOUR BET" card, mirroring the top-left header — there was
 ## previously no way to see what you'd actually wagered once the betting
 ## screen hid itself for the race. `bet_context` is `{bet_type, picks,
@@ -155,7 +306,7 @@ func _build_bet_panel(bet_context: Dictionary) -> void:
 	if bet_context.is_empty():
 		return
 
-	var glass: PanelContainer = UITheme.make_glass_panel_container(14.0, Color(0.016, 0.027, 0.047, 0.55))
+	var glass: PanelContainer = UITheme.make_glass_panel_container(14.0, Color(UITheme.COLOR_BG, 0.55))
 	glass.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(glass)
 
@@ -226,7 +377,7 @@ func _build_bottom_bar() -> void:
 	# corner_radius 0 since this bar is docked flush to all three screen
 	# edges (a floating rounded card wouldn't sit right full-bleed).
 	var bar: Panel = UITheme.make_glass_panel(
-		Vector2(viewport_size.x, BOTTOM_BAR_HEIGHT), 0.0, Color(0.016, 0.027, 0.047, 0.7), UITheme.COLOR_GOLD,
+		Vector2(viewport_size.x, BOTTOM_BAR_HEIGHT), 0.0, Color(UITheme.COLOR_BG, 0.7), UITheme.COLOR_GOLD,
 	)
 	bar.position = Vector2(0.0, viewport_size.y - BOTTOM_BAR_HEIGHT)
 	add_child(bar)

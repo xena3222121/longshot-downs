@@ -6,5 +6,6 @@ extends Resource
 ## says nothing about its speed next race.
 @export var id: int
 @export var horse_name: String
+@export var jockey_name: String
 @export var silk_primary: Color
 @export var silk_secondary: Color

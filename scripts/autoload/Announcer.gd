@@ -1,78 +1,78 @@
 extends Node
 
-## Text-to-speech play-by-play layer, spoken through the OS's own speech
-## voices via DisplayServer (Windows SAPI, etc.) — silently no-ops if the
-## machine has no TTS engine/voices installed (DisplayServer doesn't expose
-## FEATURE_TEXT_TO_SPEECH the same way it exposes plain features, so
-## availability is instead confirmed by actually finding a voice), the same
-## optional-capability pattern AudioManager uses for missing sound files and
-## HorseMarker3D uses for the missing horse model — the race calls out
-## identically either way, RaceAnnouncerDirector's on-screen commentary
-## caption (BroadcastHUD.show_commentary) always carries the same line
-## regardless of whether TTS is actually available.
+## Play-by-play layer. tools/generate_announcer_audio.py pre-renders every
+## (template x horse name) combination worth caching through the ElevenLabs
+## API into assets/audio/announcer/, indexed by exact line text in
+## manifest.json. say() plays that clip when the line has one.
 ##
-## Ducks AudioManager's music (via set_speech_duck) for as long as a line is
-## being spoken, then releases it once tts_is_speaking() goes false — so the
-## announcer is never fighting the theme/ambience for attention.
+## Deliberately no OS-TTS fallback for lines with no cached clip (used to
+## fall back to DisplayServer SAPI voices, which meant races could jump
+## between the real ElevenLabs voice and a completely different-sounding
+## robotic one mid-broadcast — worse than just staying silent). Any
+## uncached line — FILLER_CALLS_2/3, or a bank not yet generated — simply
+## doesn't speak; RaceAnnouncerDirector's on-screen commentary caption
+## (BroadcastHUD.show_commentary) still carries the line either way, so
+## nothing is lost but the voice.
+##
+## Ducks AudioManager's music (via set_speech_duck) for as long as a cached
+## clip is playing, then releases it once it stops — so the announcer is
+## never fighting the theme/ambience for attention.
 
-const RATE: float = 1.5 # rapid-fire race-caller pace, closer to a real track announcer than a narrator
-const EXCITED_RATE: float = 1.7 # for the biggest moments — a duel call, the win call
-const PITCH: float = 0.92 # slightly lower than the voice's default reads as more "announcer," less flat narrator
-const EXCITED_PITCH: float = 1.05
-const VOLUME: int = 100
 const DUCK_DB: float = -10.0
 const DUCK_LERP_SPEED: float = 6.0
 
-## Preference order for which installed OS voice to use — earlier names win.
-## These are common deeper/more energetic Windows SAPI voice names; if none
-## of them are installed this just falls through to the first English voice,
-## same as before.
-const PREFERRED_VOICE_NAME_HINTS: Array[String] = ["david", "mark", "male"]
+const CACHE_DIR: String = "res://assets/audio/announcer/"
+const MANIFEST_PATH: String = CACHE_DIR + "manifest.json"
 
-var _voice_id: String = ""
-var _available: bool = false
 var _target_duck_db: float = 0.0
 var _current_duck_db: float = 0.0
 
+var _manifest: Dictionary = {} # exact line text -> clip filename under CACHE_DIR
+var _stream_cache: Dictionary = {} # clip filename -> loaded AudioStream
+var _clip_player: AudioStreamPlayer
+
 func _ready() -> void:
-	_voice_id = _pick_voice()
-	_available = _voice_id != ""
-	set_process(_available)
+	_manifest = _load_manifest()
 
-func _pick_voice() -> String:
-	var voices: Array = DisplayServer.tts_get_voices()
-	var english: Array = []
-	for voice in voices:
-		if String(voice.get("language", "")).begins_with("en"):
-			english.append(voice)
+	_clip_player = AudioStreamPlayer.new()
+	_clip_player.bus = AudioManager.SFX_BUS
+	add_child(_clip_player)
 
-	for hint in PREFERRED_VOICE_NAME_HINTS:
-		for voice in english:
-			if hint in String(voice.get("name", "")).to_lower():
-				return String(voice.get("id", ""))
+	set_process(true)
 
-	if not english.is_empty():
-		return String(english[0].get("id", ""))
-	if not voices.is_empty():
-		return String(voices[0].get("id", ""))
-	return ""
+func _load_manifest() -> Dictionary:
+	if not FileAccess.file_exists(MANIFEST_PATH):
+		return {}
+	var text: String = FileAccess.get_file_as_string(MANIFEST_PATH)
+	var parsed: Variant = JSON.parse_string(text)
+	return parsed if parsed is Dictionary else {}
 
-## `interrupt = true` — a fresh line always cuts off whatever's still being
-## read, matching a real announcer adjusting to the moment rather than
-## finishing a stale sentence about a lead that's already changed again.
-## `excited` bumps rate/pitch further for the biggest moments (a stretch
-## duel, the win call) so they read as a bigger beat than a routine leader
-## update, the same way a real caller's voice rises for the finish.
+## `excited` is accepted for call-site compatibility with RaceAnnouncerDirector
+## but no longer changes anything here — a cached clip was already rendered
+## excited or not (see generate_announcer_audio.py's BANKS map) at generation
+## time, and an uncached line just doesn't speak at all (see class comment).
 func say(text: String, excited: bool = false) -> void:
-	if not _available:
+	var clip: String = _manifest.get(text, "")
+	if clip == "":
 		return
-	var rate: float = EXCITED_RATE if excited else RATE
-	var pitch: float = EXCITED_PITCH if excited else PITCH
-	DisplayServer.tts_speak(text, _voice_id, VOLUME, pitch, rate, 0, true)
+	var stream: AudioStream = _stream_cache.get(clip)
+	if stream == null:
+		stream = load(CACHE_DIR + clip)
+		_stream_cache[clip] = stream
+	_clip_player.stream = stream
+	_clip_player.play()
 	_target_duck_db = DUCK_DB
 
+## RaceAnnouncerDirector gates on this before firing a non-forced line — see
+## its own _say() — so a new call waits for the CURRENT clip to actually
+## finish instead of cutting it off mid-word. Without this, cranking the
+## calling frequency up just meant every clip started interrupting the
+## previous one every ~0.5s, which is talking constantly but unintelligibly.
+func is_speaking() -> bool:
+	return _clip_player.playing
+
 func _process(delta: float) -> void:
-	if not DisplayServer.tts_is_speaking():
+	if not _clip_player.playing:
 		_target_duck_db = 0.0
 	var t: float = 1.0 - exp(-delta * DUCK_LERP_SPEED)
 	_current_duck_db = lerp(_current_duck_db, _target_duck_db, t)

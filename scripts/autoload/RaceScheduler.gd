@@ -15,12 +15,21 @@ extends Node
 ## optional for this, watching the spectacle doesn't require it. This script
 ## hands off to that flow via race_ready rather than duplicating it.
 ##
-## Every venue with NO screen assigned, ticking down in the background
-## regardless of what's on screen, resolves silently and instantly when its
-## countdown hits zero: WIN/PLACE/SHOW bets only for now (v1 — the full
+## Every venue actually RUNS its race the moment its countdown hits zero,
+## whether or not a screen is watching — AJ: "make it start anyways, if im
+## not watching it it still runs and remains live until the race is over, if
+## i choose to tune in itll open at whatever part of the race its at." A
+## venue with no screen assigned races silently for the same real-time
+## duration a watched one takes (see `race_elapsed`/`VenueState.result`
+## below) before resolving: WIN/PLACE/SHOW bets only for now (v1 — the full
 ## Exacta/Trifecta/Daily-Double matrix stays exclusive to an on-screen venue;
 ## extending background resolution to every bet type is a reasonable
-## fast-follow, not done here to keep this landable).
+## fast-follow, not done here to keep this landable). Assigning a screen to a
+## venue that's already mid-race (see screen_assignment_changed) hands
+## TrackLobby the SAME already-computed RaceResult plus how far into it the
+## race already is, so it can build a RaceTrack3D seeked to that point
+## instead of restarting from the gate — this game's actual "catch the race
+## already in progress" moment.
 
 signal race_ready(venue_id: String, screen: int, result: RaceResult, bet_context: Dictionary)
 signal background_result(venue_id: String, description: String, won: bool, payout: int)
@@ -30,13 +39,46 @@ signal screen_assignment_changed(screen: int, venue_id: String)
 const POST_INTERVAL: float = 240.0 # 4 minutes between races per venue — TVG-plausible pacing
 const SCREEN_COUNT: int = 4 # how many venues can get the full visual treatment AT ONCE — see TrackLobby's split-screen view
 
+## Cosmetic pre-race odds drift — AJ: "make the odds change before the race
+## like in live betting but not drastically... realistic like late money
+## comes on a certain horse." Real pari-mutuel odds move continuously as
+## money comes in, and a bettor is paid whatever the board reads at ACTUAL
+## post time, not whatever it read when they placed their bet — this needs
+## zero extra plumbing to get that right, since `_on_post_time` below already
+## passes `state.tiers` (the exact dicts this drift mutates in place) into
+## `RaceSim.simulate`, which snapshots them onto RaceResult at that instant.
+## Mean-reverting random walk (same Ornstein-Uhlenbeck shape as RaceSim's own
+## `surge` mechanic) bounded to a "noticeable but not drastic" range, plus a
+## rare one-time sharper tightening in the final quarter of the countdown on
+## at most one horse per venue per race — the "late money" moment.
+const ODDS_DRIFT_REVERSION: float = 0.22
+const ODDS_DRIFT_VOLATILITY: float = 0.42
+const ODDS_DRIFT_MAX_DEVIATION: float = 0.35 # odds can lengthen up to +35% over their base (money staying away)
+const ODDS_DRIFT_MIN_DEVIATION: float = -0.3 # or tighten down to -30% from ordinary ambient drift alone
+const LATE_MONEY_WINDOW_FRACTION: float = 0.25 # only eligible in the final quarter of the countdown
+const LATE_MONEY_CHANCE_PER_SECOND: float = 0.006 # small — not every race gets a late-money moment
+const LATE_MONEY_MIN_DEVIATION: float = -0.5
+const LATE_MONEY_MAX_DEVIATION: float = -0.3 # a real, noticeable "the money's on this one" swing, still bounded so it can't produce a nonsensical near-1.0x payout
+
+## AJ: "make it so they randomly race on turf or dirt." Purely cosmetic
+## (RaceTrack3D's surface color/BroadcastHUD's header tag) — doesn't touch
+## RaceSim's performance math at all, same "displayed conditions aren't a
+## performance model" spirit as the odds drift above. Dirt is the more common
+## surface in North American racing (this game's clear stylistic reference —
+## TVG, post-time countdowns, etc.), so turf stays the minority surface.
+const TURF_CHANCE: float = 0.35
+
 class VenueState:
 	var venue_id: String
 	var countdown: float = POST_INTERVAL
 	var field: Array[Horse] = []
 	var tiers: Array[Dictionary] = []
 	var bet: Dictionary = {} # {} = no bet placed for the UPCOMING race at this venue
-	var is_racing: bool = false # true while a screen's visual flow is playing this venue's race out — pauses ticking
+	var is_racing: bool = false # true from post time until this race is fully resolved — REGARDLESS of whether a screen is watching; pauses countdown ticking
+	var is_turf: bool = false # this race's track surface — see TURF_CHANCE
+	var result: RaceResult # the CURRENT race's already-computed result, set at post time, cleared on resolution — lets a screen assigned later join wherever this actually is
+	var race_elapsed: float = 0.0 # real seconds since this race's post time — same units RaceTrack3D.playback_time already runs in, so a join just seeds that field directly, no conversion
+	var race_bet_context: Dictionary = {} # frozen at post time from `bet`, same shape race_ready already emits — real pari-mutuel rule: what airs/pays out reflects the bet AT POST TIME (see place_bet's new is_racing guard, which stops a NEW bet on a race already underway)
 
 ## screen_venue_ids[i] = which venue screen `i` is currently showing, or ""
 ## if that screen is unassigned. Screen 0 defaults to the flagship venue so
@@ -104,10 +146,47 @@ func _process(delta: float) -> void:
 	for venue_id in Venues.VENUE_IDS:
 		var state: VenueState = _venues[venue_id]
 		if state.is_racing:
+			# A venue currently on a screen is resolved by that screen's own
+			# playback -> replay -> podium flow calling finish_watched_race
+			# whenever IT decides the race is over (which can be well after
+			# `result.duration`, e.g. during the replay/podium beats) — only
+			# an UNWATCHED race times out here, against the same real-second
+			# duration a watched one takes.
+			if screen_venue_ids.find(venue_id) == -1:
+				state.race_elapsed += delta
+				if state.race_elapsed >= state.result.duration:
+					_resolve_background(state, state.result)
+					state.is_racing = false
+					_reset_venue(state)
 			continue
 		state.countdown -= delta
+		_drift_odds(state, delta)
 		if state.countdown <= 0.0:
-			_on_post_time(state)
+			_start_race(state)
+
+## See this file's own const block above for the design rationale. Mutates
+## each tier dict's `_drift_deviation` (internal state), `live_win_multiplier`,
+## and `label` in place — every UI/payout call site already reads these same
+## dict references via OddsTable.decimal_multiplier/payout, so nothing else
+## needs to change to pick this up.
+func _drift_odds(state: VenueState, delta: float) -> void:
+	var late_window_start: float = POST_INTERVAL * LATE_MONEY_WINDOW_FRACTION
+	var in_late_window: bool = state.countdown <= late_window_start
+
+	for tier in state.tiers:
+		var deviation: float = tier.get("_drift_deviation", 0.0)
+		deviation += -ODDS_DRIFT_REVERSION * deviation * delta + randfn(0.0, ODDS_DRIFT_VOLATILITY * sqrt(delta))
+		deviation = clamp(deviation, ODDS_DRIFT_MIN_DEVIATION, ODDS_DRIFT_MAX_DEVIATION)
+
+		if in_late_window and not tier.get("_late_money_fired", false) and randf() < LATE_MONEY_CHANCE_PER_SECOND * delta:
+			deviation = randf_range(LATE_MONEY_MIN_DEVIATION, LATE_MONEY_MAX_DEVIATION)
+			tier["_late_money_fired"] = true
+
+		tier["_drift_deviation"] = deviation
+		var base_win_multiplier: float = float(tier.num) / float(tier.den) + 1.0
+		var live_win_multiplier: float = max(1.05, base_win_multiplier * (1.0 + deviation))
+		tier["live_win_multiplier"] = live_win_multiplier
+		tier["label"] = OddsTable.live_odds_label(live_win_multiplier)
 
 func get_countdown(venue_id: String) -> float:
 	return max(0.0, _venues[venue_id].countdown)
@@ -117,6 +196,9 @@ func get_field(venue_id: String) -> Array[Horse]:
 
 func get_tiers(venue_id: String) -> Array[Dictionary]:
 	return _venues[venue_id].tiers
+
+func get_is_turf(venue_id: String) -> bool:
+	return _venues[venue_id].is_turf
 
 func has_bet(venue_id: String) -> bool:
 	return not _venues[venue_id].bet.is_empty()
@@ -152,9 +234,14 @@ func set_screen_venue(screen: int, venue_id: String) -> bool:
 ## Called by TrackLobby's bet popup — WIN/PLACE/SHOW only (single horse_index,
 ## see class comment). Overwrites any previous bet on this venue's upcoming
 ## race, matching how the original single-track BettingUI also only ever
-## tracked one in-flight bet at a time.
+## tracked one in-flight bet at a time. Refuses once this venue's race has
+## actually gone off (is_racing) — real pari-mutuel wagering closes at post
+## time, and this venue's race may already be running invisibly in the
+## background by the time a player opens the bet dialog on it.
 func place_bet(venue_id: String, horse_index: int, bet_type: OddsTable.BetType, amount: int) -> bool:
 	var state: VenueState = _venues[venue_id]
+	if state.is_racing:
+		return false
 	if not state.bet.is_empty():
 		Bankroll.pay(state.bet.amount) # refund the previous bet on THIS venue's upcoming race before replacing it — changing your pick shouldn't double-charge you
 	if not Bankroll.place_bet(amount):
@@ -164,26 +251,41 @@ func place_bet(venue_id: String, horse_index: int, bet_type: OddsTable.BetType, 
 	state.bet = {"horse_index": horse_index, "bet_type": bet_type, "amount": amount}
 	return true
 
-func _on_post_time(state: VenueState) -> void:
-	var result: RaceResult = RaceSim.simulate(state.field, state.tiers)
+## Every venue's race actually starts here, screen or no screen — see this
+## file's own class comment. `state.result`/`race_bet_context` are stored
+## (not just passed through locally) specifically so a screen assigned
+## AFTER this point can still join via get_live_race() below.
+func _start_race(state: VenueState) -> void:
+	state.result = RaceSim.simulate(state.field, state.tiers)
+	state.race_elapsed = 0.0
+	state.is_racing = true
+	state.race_bet_context = {}
+	if not state.bet.is_empty():
+		state.race_bet_context = {
+			"bet_type": state.bet.bet_type, "horse_index": state.bet.horse_index, "second_index": -1,
+			"picks": [state.bet.horse_index], "amount": state.bet.amount, "dd_leg": 0,
+		}
 	var screen: int = screen_venue_ids.find(state.venue_id)
 	if screen != -1:
-		state.is_racing = true
-		var bet_context: Dictionary = {}
-		if not state.bet.is_empty():
-			bet_context = {
-				"bet_type": state.bet.bet_type, "horse_index": state.bet.horse_index, "second_index": -1,
-				"picks": [state.bet.horse_index], "amount": state.bet.amount, "dd_leg": 0,
-			}
-		race_ready.emit(state.venue_id, screen, result, bet_context)
-	else:
-		_resolve_background(state, result)
-		_reset_venue(state)
+		race_ready.emit(state.venue_id, screen, state.result, state.race_bet_context)
 
-## Only reached for a venue with no screen assigned — no playback at all,
-## just an instant win/loss check + payout + a notification the lobby can
-## surface (see background_result). A no-op if there was no bet either
-## (nothing to resolve, nothing to notify about).
+## Read by TrackLobby when a screen gets assigned to a venue that's already
+## `is_racing` (see screen_assignment_changed) — hands back the SAME result
+## computed at post time plus how many real seconds have elapsed, so the new
+## screen can seek RaceTrack3D straight to "wherever this actually is" rather
+## than restarting the race from the gate. Empty dictionary if this venue
+## isn't actually racing right now (nothing to join).
+func get_live_race(venue_id: String) -> Dictionary:
+	var state: VenueState = _venues[venue_id]
+	if not state.is_racing or state.result == null:
+		return {}
+	return {"result": state.result, "bet_context": state.race_bet_context, "elapsed": state.race_elapsed}
+
+## Only reached for a venue with no screen assigned when its race's real
+## duration has fully elapsed — no playback at all, just a win/loss check +
+## payout + a notification the lobby can surface (see background_result). A
+## no-op if there was no bet either (nothing to resolve, nothing to notify
+## about).
 func _resolve_background(state: VenueState, result: RaceResult) -> void:
 	if state.bet.is_empty():
 		return
@@ -228,6 +330,9 @@ func force_finish_all_races() -> void:
 
 func _reset_venue(state: VenueState) -> void:
 	state.bet = {}
+	state.result = null
+	state.race_elapsed = 0.0
+	state.race_bet_context = {}
 	_draw_field(state)
 	state.countdown = POST_INTERVAL
 	countdown_reset.emit(state.venue_id)
@@ -238,3 +343,4 @@ func _draw_field(state: VenueState) -> void:
 	state.field = roster.slice(0, 8)
 	HorseRoster.assign_race_colors(state.field)
 	state.tiers = OddsTable.assign_to_field(state.field.size())
+	state.is_turf = randf() < TURF_CHANCE

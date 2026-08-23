@@ -37,18 +37,29 @@ var _active_race_tracks: Dictionary = {} # screen -> RaceTrack3D
 var _screen_audio_buttons: Dictionary = {} # screen -> Button
 var _audio_focus_screen: int = 0 # exactly one screen's audio is ever live at once — see RaceTrack3D.has_audio_focus
 
+var _active_bet_dialog: AcceptDialog # tracked so _show_busted_dialog can close it first — see that function's own comment for the real crash this fixes
 var _balance_label: Label
 var _toast_label: Label
 var _toast_elapsed: float = 0.0
 var _toast_active: bool = false
+
+var _screens_grid: GridContainer
+var _screen_tile_wrappers: Dictionary = {} # screen -> the tile's wrapper Control, for show/hide when the display-count layout changes
+var _display_count_buttons: Dictionary = {} # count (1/2/SCREEN_COUNT) -> its picker Button
+var _display_title_label: Label
+var _display_count: int = 4 # how many screen tiles are currently shown — see Settings.screen_display_count / _set_display_count
 
 func _ready() -> void:
 	ScreenFade.fade_in() # arriving here from TitleScreen's own fade_out
 	AudioManager.play_music("theme")
 	RaceScheduler.race_ready.connect(_on_race_ready)
 	RaceScheduler.background_result.connect(_on_background_result)
+	RaceScheduler.screen_assignment_changed.connect(_on_screen_assignment_changed)
 	Bankroll.balance_changed.connect(_on_balance_changed)
+	Bankroll.went_broke.connect(_show_busted_dialog)
+	_display_count = clamp(Settings.screen_display_count, 1, RaceScheduler.SCREEN_COUNT)
 	_build_layout()
+	_apply_display_count() # sync tile visibility/grid columns/picker state to the loaded preference — _build_layout() itself always builds all SCREEN_COUNT tiles/buttons
 	RaceScheduler.begin_watching() # only starts/resumes ticking once something is actually here to receive race_ready — see its own comment for why
 
 func _process(_delta: float) -> void:
@@ -88,15 +99,17 @@ func _build_layout() -> void:
 
 	root.add_child(_build_sidebar())
 
-	var screens_grid := GridContainer.new()
-	screens_grid.columns = SCREEN_GRID_COLUMNS
-	screens_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	screens_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	screens_grid.add_theme_constant_override("h_separation", 6)
-	screens_grid.add_theme_constant_override("v_separation", 6)
-	root.add_child(screens_grid)
+	_screens_grid = GridContainer.new()
+	_screens_grid.columns = SCREEN_GRID_COLUMNS
+	_screens_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_screens_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_screens_grid.add_theme_constant_override("h_separation", 6)
+	_screens_grid.add_theme_constant_override("v_separation", 6)
+	root.add_child(_screens_grid)
 	for screen in range(RaceScheduler.SCREEN_COUNT):
-		screens_grid.add_child(_build_screen_tile(screen))
+		var tile: Control = _build_screen_tile(screen)
+		_screen_tile_wrappers[screen] = tile
+		_screens_grid.add_child(tile)
 
 	_build_toast()
 
@@ -120,11 +133,12 @@ func _build_sidebar() -> Control:
 	vbox.add_child(_balance_label)
 	_update_balance_label()
 
-	var title := Label.new()
-	title.theme_type_variation = "EyebrowLabel"
-	title.add_theme_font_size_override("font_size", 10)
-	title.text = "SIMULCAST — %d SCREENS" % RaceScheduler.SCREEN_COUNT
-	vbox.add_child(title)
+	_display_title_label = Label.new()
+	_display_title_label.theme_type_variation = "EyebrowLabel"
+	_display_title_label.add_theme_font_size_override("font_size", 10)
+	vbox.add_child(_display_title_label)
+
+	_build_display_count_picker(vbox)
 
 	# ScrollContainer stays as a safety net if the window is ever resized
 	# smaller than the design resolution -- but at the normal window size the
@@ -154,6 +168,83 @@ func _build_sidebar() -> Control:
 	UITheme.add_button_juice(exit_btn)
 
 	return panel
+
+## "1 / 2 / 4" viewing-layout picker — AJ: "make it so you can toggle 1
+## screen 2 screens or 4 screens, if you want to watch one screen you should
+## be able to [go] huge." Screen 0 is always the one shown in 1-screen mode
+## (it's already the flagship default per screen_venue_ids' own init in
+## RaceScheduler.gd), and GridContainer skips invisible children entirely
+## when laying itself out (documented Godot Container behavior) — so hiding
+## the other tiles and dropping to 1 column is enough to make the remaining
+## tile expand to fill the whole screens area on its own; no separate
+## "big mode" layout branch is needed.
+func _build_display_count_picker(parent: Control) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	parent.add_child(row)
+
+	var label := Label.new()
+	label.text = "View:"
+	label.add_theme_font_size_override("font_size", 10)
+	row.add_child(label)
+
+	for count in [1, 2, RaceScheduler.SCREEN_COUNT]:
+		var btn := Button.new()
+		btn.text = "%d screen%s" % [count, "" if count == 1 else "s"]
+		btn.toggle_mode = true
+		btn.custom_minimum_size = Vector2(0.0, 18.0)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", 9)
+		btn.pressed.connect(_set_display_count.bind(count))
+		_apply_tight_button_style(btn, 2.0, 1.0)
+		row.add_child(btn)
+		_display_count_buttons[count] = btn
+
+## Toggling down (e.g. 4 -> 1) hides screens n..SCREEN_COUNT-1 and clears any
+## venue assignment on them — refused (with a toast, same pattern as
+## _on_background_result's notifications) if any of those screens is
+## currently mid-race, the same "can't yank a screen out from under a live
+## race" rule set_screen_venue already enforces for a single reassignment —
+## otherwise a race the player is mid-watching on screen 3 would just vanish
+## the instant they clicked "1 screen."
+func _set_display_count(n: int) -> void:
+	if n == _display_count:
+		return
+	for screen in range(n, RaceScheduler.SCREEN_COUNT):
+		var venue_id: String = RaceScheduler.screen_venue_ids[screen]
+		if venue_id != "" and RaceScheduler.is_racing(venue_id):
+			_show_toast("Screen %d is still racing — wait for it to finish before switching to %d screen%s." % [screen + 1, n, "" if n == 1 else "s"])
+			return
+
+	for screen in range(n, RaceScheduler.SCREEN_COUNT):
+		if RaceScheduler.screen_venue_ids[screen] != "":
+			RaceScheduler.set_screen_venue(screen, "")
+
+	_display_count = n
+	Settings.set_screen_display_count(n)
+	_apply_display_count()
+	AudioManager.play_sfx("bet_click")
+
+## Syncs the grid/tiles/sidebar-buttons/picker-state to _display_count —
+## called once after _build_layout() (to apply a loaded preference to the
+## always-fully-built tile set) and again every time _set_display_count runs.
+func _apply_display_count() -> void:
+	_screens_grid.columns = 1 if _display_count == 1 else SCREEN_GRID_COLUMNS
+	for screen in range(RaceScheduler.SCREEN_COUNT):
+		var wrapper: Control = _screen_tile_wrappers.get(screen)
+		if wrapper != null:
+			wrapper.visible = screen < _display_count
+
+	for venue_id in Venues.VENUE_IDS:
+		var buttons: Array = _row_screen_buttons.get(venue_id, [])
+		for screen in range(buttons.size()):
+			buttons[screen].visible = screen < _display_count
+
+	if _display_title_label != null:
+		_display_title_label.text = "SIMULCAST — %d SCREEN%s" % [_display_count, "" if _display_count == 1 else "S"]
+
+	for count in _display_count_buttons.keys():
+		_display_count_buttons[count].button_pressed = (count == _display_count)
 
 ## The shared theme's default Button stylebox bakes in 18px/10px content
 ## margins (same formula as PanelContainer's — see UITheme._panel_style)
@@ -332,7 +423,7 @@ func _build_screen_tile(screen: int) -> Control:
 	# clicking through to, and the Continue button below needs to actually
 	# receive input. Irrelevant while overlay.visible is false: an invisible
 	# Control never receives input regardless of filter.
-	var overlay: PanelContainer = UITheme.make_glass_panel_container(10.0, Color(0.016, 0.027, 0.047, 0.75))
+	var overlay: PanelContainer = UITheme.make_glass_panel_container(10.0, Color(UITheme.COLOR_BG, 0.75))
 	overlay.set_anchors_preset(Control.PRESET_CENTER)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	wrapper.add_child(overlay)
@@ -370,7 +461,9 @@ func _build_screen_tile(screen: int) -> Control:
 	_screen_overlay_labels[screen] = overlay_label
 
 	var continue_btn := Button.new()
-	continue_btn.text = "Continue"
+	continue_btn.text = "CONTINUE"
+	continue_btn.theme_type_variation = "PrimaryButton"
+	continue_btn.custom_minimum_size = Vector2(0.0, 44.0)
 	continue_btn.visible = false
 	continue_btn.pressed.connect(_on_compact_result_continue.bind(screen))
 	overlay_box.add_child(continue_btn)
@@ -416,17 +509,42 @@ func _any_other_screen_racing(exclude_screen: int) -> bool:
 
 ## Fires for whichever venue/screen combination RaceScheduler decided should
 ## get the full visual treatment this cycle — see its own class comment for
-## exactly when that is (any venue currently assigned to a screen).
+## exactly when that is (any venue currently assigned to a screen at the
+## exact moment its post time hits). Runs the full pre-race ceremony since
+## the player was already watching before the gate opened.
 func _on_race_ready(venue_id: String, screen: int, result: RaceResult, bet_context: Dictionary) -> void:
+	var race_track: RaceTrack3D = _build_race_track(venue_id, screen, result, bet_context)
+	if race_track != null:
+		race_track.play_with_post_time()
+
+## AJ: "make it start anyways, if im not watching it it still runs and
+## remains live until the race is over, if i choose to tune in itll open at
+## whatever part of the race its at." A venue can go from unassigned to
+## assigned at ANY point, not just at post time — if RaceScheduler reports
+## that venue is already mid-race, build the same RaceTrack3D but seek it
+## straight to `elapsed` instead of running the pre-race ceremony (see
+## RaceTrack3D.join_in_progress). A venue assigned before/at its own post
+## time is a no-op here — _on_race_ready above already owns that moment.
+func _on_screen_assignment_changed(screen: int, venue_id: String) -> void:
+	if venue_id == "":
+		return
+	var live: Dictionary = RaceScheduler.get_live_race(venue_id)
+	if live.is_empty():
+		return
+	var race_track: RaceTrack3D = _build_race_track(venue_id, screen, live.result, live.bet_context)
+	if race_track != null:
+		race_track.join_in_progress(live.elapsed)
+
+func _build_race_track(venue_id: String, screen: int, result: RaceResult, bet_context: Dictionary) -> RaceTrack3D:
 	var viewport: SubViewport = _screen_viewports.get(screen)
 	if viewport == null:
-		return
+		return null
 	var race_track := RaceTrack3D.new()
 	viewport.add_child(race_track)
-	race_track.setup(RaceScheduler.get_field(venue_id), result, bet_context, venue_id, screen == _audio_focus_screen)
+	race_track.setup(RaceScheduler.get_field(venue_id), result, bet_context, venue_id, screen == _audio_focus_screen, RaceScheduler.get_is_turf(venue_id))
 	race_track.playback_finished.connect(_on_playback_finished.bind(venue_id, screen, race_track, result, bet_context))
-	race_track.play_with_post_time()
 	_active_race_tracks[screen] = race_track
+	return race_track
 
 func _on_playback_finished(venue_id: String, screen: int, race_track: RaceTrack3D, result: RaceResult, bet_context: Dictionary) -> void:
 	await race_track.play_replay() # TVG-style stretch-run replay before the podium
@@ -493,6 +611,9 @@ func _on_compact_result_continue(screen: int) -> void:
 		RaceScheduler.finish_watched_race(venue_id)
 
 func _on_bet_pressed(venue_id: String) -> void:
+	if RaceScheduler.is_racing(venue_id):
+		_show_toast("%s has already gone to post — wait for the next race to bet." % Venues.label_for(venue_id))
+		return
 	var field: Array[Horse] = RaceScheduler.get_field(venue_id)
 	var tiers: Array[Dictionary] = RaceScheduler.get_tiers(venue_id)
 
@@ -572,7 +693,9 @@ func _on_bet_pressed(venue_id: String) -> void:
 	content.add_child(status_label)
 
 	var place_btn := Button.new()
-	place_btn.text = "Place Bet"
+	place_btn.text = "PLACE BET"
+	place_btn.theme_type_variation = "PrimaryButton"
+	place_btn.custom_minimum_size = Vector2(0.0, 48.0)
 	place_btn.pressed.connect(func():
 		if selected[0] < 0:
 			status_label.text = "Pick a horse first."
@@ -594,10 +717,17 @@ func _on_bet_pressed(venue_id: String) -> void:
 	UITheme.add_button_juice(place_btn)
 
 	add_child(dialog)
+	_active_bet_dialog = dialog
 	dialog.popup_centered()
 	dialog.get_ok_button().grab_focus.call_deferred()
-	dialog.confirmed.connect(dialog.queue_free)
-	dialog.canceled.connect(dialog.queue_free)
+	dialog.confirmed.connect(func():
+		_active_bet_dialog = null
+		dialog.queue_free()
+	)
+	dialog.canceled.connect(func():
+		_active_bet_dialog = null
+		dialog.queue_free()
+	)
 
 func _make_label(text: String) -> Label:
 	var label := Label.new()
@@ -610,6 +740,54 @@ func _update_balance_label() -> void:
 
 func _on_balance_changed(_new_balance: int) -> void:
 	_update_balance_label()
+
+const BUSTED_REFILL_AMOUNT: int = 50000
+
+## AJ: "when the player runs out of bankroll play a sound that sucks and ask
+## the player if they want to try again not to suck at betting on horses and
+## refills their bankroll back to 50k." Bankroll itself only reports the
+## state via went_broke — this owns the actual UI reaction, same separation
+## as every other Bankroll signal. Reuses the existing "lose_sting" cue
+## (already the game's "you lost" sound) rather than sourcing a new asset —
+## it's already exactly the "that sucked" stinger this calls for.
+func _show_busted_dialog() -> void:
+	AudioManager.play_sfx("lose_sting")
+
+	# Real crash hit and fixed: going broke fires synchronously from inside
+	# the bet popup's own "Place Bet" button handler (Bankroll.went_broke ->
+	# this, all on the same call stack as RaceScheduler.place_bet), so the
+	# bet dialog is still fully open the instant this tried to open a SECOND
+	# one — Godot refused ("parent window already has another exclusive
+	# child"), confirmed via AJ's actual play session console output.
+	# queue_free() alone isn't enough here: it only marks the bet dialog for
+	# deletion at the end of THIS frame, but popup_centered() on a new
+	# exclusive dialog checks synchronously, in the same call — so the new
+	# dialog still has to wait. Deferring the actual build/popup to the next
+	# idle frame (queued AFTER the queue_free() below, so it runs after)
+	# gives the old dialog time to actually leave the tree first.
+	if _active_bet_dialog != null and is_instance_valid(_active_bet_dialog):
+		_active_bet_dialog.queue_free()
+		_active_bet_dialog = null
+	_build_busted_dialog.call_deferred()
+
+func _build_busted_dialog() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "Busted!"
+	dialog.dialog_text = "You're out of money. You kind of suck at betting on horses, ngl.\n\nWant to try again?"
+	dialog.ok_button_text = "Try Again"
+
+	add_child(dialog)
+	dialog.popup_centered()
+	dialog.get_ok_button().grab_focus.call_deferred()
+	# Both paths refill — AcceptDialog has no Cancel button, but Escape/the
+	# window's own close control still fire `canceled`, and going broke with
+	# no way back in would just soft-lock the player (nothing else in the
+	# live TrackLobby flow ever refills a mid-session busted balance).
+	var refill_and_close := func():
+		Bankroll.refill(BUSTED_REFILL_AMOUNT)
+		dialog.queue_free()
+	dialog.confirmed.connect(refill_and_close)
+	dialog.canceled.connect(refill_and_close)
 
 ## Small fading toast for whatever happens at a venue with no screen
 ## assigned — without this there'd be no way to ever know a background bet

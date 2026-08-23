@@ -35,6 +35,7 @@ const MILLIONAIRE_BALANCE: int = 2000000
 const CENTURY_CLUB_RACES: int = 100
 const HOT_STREAK_LENGTH: int = 3
 const ON_FIRE_STREAK_LENGTH: int = 5
+const RECENT_FINISHES_SHOWN: int = 5
 
 const ACHIEVEMENTS: Dictionary = {
 	"first_blood": {"name": "First Blood", "description": "Win your very first bet."},
@@ -82,6 +83,20 @@ func get_horse_record_label(horse_id: int) -> String:
 		return ""
 	return "(%dW-%dR) " % [int(stats.get("wins", 0)), races]
 
+## Real-racing "form line" — this horse's last RECENT_FINISHES_SHOWN finish
+## positions, most recent first (e.g. "1-3-2-5-1"). Empty string for a horse
+## with no recorded finishes yet, same "nothing worth showing" convention as
+## get_horse_record_label above.
+func get_horse_form_string(horse_id: int) -> String:
+	var stats: Dictionary = horse_stats.get(str(horse_id), {})
+	var recent: Array = stats.get("recent_finishes", [])
+	if recent.is_empty():
+		return ""
+	var parts: Array[String] = []
+	for placing in recent:
+		parts.append(str(placing))
+	return "-".join(parts)
+
 ## Called once per race actually run, regardless of whether a bet was placed
 ## on it (Daily Double leg 1 has no resolved bet yet, but the race still
 ## happened and its horses still earned a race credit) — increments every
@@ -93,10 +108,24 @@ func get_horse_record_label(horse_id: int) -> String:
 ## caller, never stored its own field array either.
 func record_finish(result: RaceResult) -> Array[String]:
 	total_races += 1
-	for state in result.field:
+	for i in range(result.field.size()):
+		var state: RaceHorseState = result.field[i]
 		var key: String = str(state.horse.id)
 		var stats: Dictionary = horse_stats.get(key, {"races": 0, "wins": 0})
 		stats.races = int(stats.get("races", 0)) + 1
+
+		# Real racing "form line" (e.g. "1-3-2-5-1", most recent first) — a
+		# broadcast/tote-board staple this game had no data for at all before
+		# now (horse_stats only ever tracked lifetime win/race COUNTS, never
+		# a sequence). Capped to the last RECENT_FINISHES_SHOWN starts, most
+		# recent prepended, so it reads newest-to-oldest the way a real form
+		# line does.
+		var placing: int = result.finish_order.find(i) + 1 # find() returns -1 if absent (shouldn't happen — every field horse finishes), so 0 would mean "didn't finish"; not specially handled since RaceSim always fills finish_order for every horse
+		var recent: Array = stats.get("recent_finishes", [])
+		recent = [placing] + recent
+		recent = recent.slice(0, RECENT_FINISHES_SHOWN)
+		stats.recent_finishes = recent
+
 		horse_stats[key] = stats
 	if not result.finish_order.is_empty():
 		var winner_key: String = str(result.field[result.finish_order[0]].horse.id)
