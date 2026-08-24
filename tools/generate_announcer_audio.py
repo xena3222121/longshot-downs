@@ -3,16 +3,21 @@
 
 Reads the commentary templates straight out of RaceAnnouncerDirector.gd and
 the horse roster straight out of HorseRoster.gd (so this never drifts from
-the actual game text), renders every template x horse-name combination that's
-worth pre-caching, and calls the ElevenLabs TTS API once per unique line.
-Output goes to assets/audio/announcer/<hash>.mp3 plus a manifest.json mapping
-exact line text -> filename, which Announcer.gd reads at runtime.
+the actual game text), renders every template x horse-name (or, for the
+filler banks, x post-position-number permutation) combination that's worth
+pre-caching, and calls the ElevenLabs TTS API once per unique line. Output
+goes to assets/audio/announcer/<hash>.mp3 plus a manifest.json mapping exact
+line text -> filename, which Announcer.gd reads at runtime.
 
-Deliberately excludes FILLER_CALLS_2 / FILLER_CALLS_3: those interpolate 2-3
-horse names in running order, so the combinatorial space (which horses, which
-order) isn't practically pre-cacheable. Announcer.gd falls back to the
-existing OS TTS voice for any line not found in the manifest, so filler just
-keeps using that.
+FILLER_CALLS_2 / FILLER_CALLS_3 use post-position NUMBERS (%d), not horse
+names, specifically so they ARE cacheable: which of up to 60 horse names ends
+up running 1-2-3 isn't a boundable space, but post position is always capped
+at FIELD_SIZE regardless of which horses got drawn, so it's just permutations
+of 1..FIELD_SIZE. These two banks are the ONLY mechanism that fills dead air
+between real events, so leaving them uncached (the original design) meant
+the announcer went completely silent, every race, whenever nothing dramatic
+was happening — Announcer.gd has no OS-TTS fallback (removed on purpose, see
+its own header comment), so an uncached line is caption-only, no voice.
 
 Usage:
     set ELEVENLABS_API_KEY=...
@@ -27,6 +32,7 @@ several runs/months by just re-running this until the manifest is complete.
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -42,16 +48,29 @@ MANIFEST_PATH = OUT_DIR / "manifest.json"
 
 API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
+# Post positions are always 1..FIELD_SIZE regardless of which of the 60
+# roster horses got drawn (see HorseRoster.generate/assign_race_colors and
+# RaceScheduler's field draw) — this bounds FILLER_CALLS_2/3's permutation
+# space so they're cacheable at all. Keep in sync with the actual per-race
+# field size if that ever changes.
+FIELD_SIZE = 8
+
 # Which banks to pre-render, and whether that bank is spoken "excited" (bumps
 # ElevenLabs' speed setting) — mirrors the excited flag each call site passes
 # to Announcer.say() in RaceAnnouncerDirector.gd.
 #
 # Order here is generation PRIORITY under a monthly credit cap, not the order
-# banks appear in RaceAnnouncerDirector.gd: cheap-and-currently-empty banks
-# (RACE_START/TURN/STRETCH/DUEL — only 3 lines each, no %s) go first so a
-# partial run never leaves them silent, then the finish-line calls (WIN/
-# BLOWOUT/PHOTO — heard at the single most memorable moment of every race)
-# come before topping off the already-mostly-cached MOVE_CALLS/LEADER_CALLS.
+# banks appear in RaceAnnouncerDirector.gd.
+#
+# FILLER_CALLS_2/3 (numeric, permutation-based) REMOVED 2026-08-23 after AJ
+# actually heard them: "announcer says number 3 number 7 instead of horses
+# name kinda annoying." A full monthly credit run had already been spent
+# generating FILLER_CALLS_3 — that audio is still on disk, just unreferenced,
+# per this project's convention of not deleting shipped/generated assets.
+# Replaced with FILLER_LEADER_CALLS/FILLER_CHASER_CALLS, which mention ONE
+# real horse name per line instead of 2-3 post-position numbers — same flat
+# per-name cost shape as LEADER_CALLS/MOVE_CALLS below (cheap), not a
+# permutation blowup.
 BANKS = {
     "RACE_START_CALLS": True,
     "TURN_CALLS": False,
@@ -60,20 +79,56 @@ BANKS = {
     "WIN_CALLS": True,
     "PHOTO_WIN_CALLS": True,
     "BLOWOUT_WIN_CALLS": True,
-    "MOVE_CALLS": False,
+    "FILLER_LEADER_CALLS": False,
+    "FILLER_CHASER_CALLS": False,
     "LEADER_CALLS": False,
+    "MOVE_CALLS": False,
 }
 
 CONST_ARRAY_RE = re.compile(r'const\s+(\w+)\s*:\s*Array\[String\]\s*=\s*\[(.*?)\]', re.DOTALL)
 STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
+# Manual, non-lossy escape handling for the few GDScript string escapes these
+# templates could plausibly use. Deliberately NOT `s.encode().decode("unicode_escape")`
+# (the original approach): that round-trips through bytes assuming each byte
+# is its own Latin-1 code point, which mangles any real non-ASCII character
+# (e.g. the em dash in PHOTO_WIN_CALLS's "%s just gets there first — what a
+# finish!" became three garbage codepoints — a real bug caught 2026-08-23
+# mid-generation-run after already corrupting some manifest entries: the
+# corrupted text was sent to ElevenLabs as the TTS input AND doesn't match
+# what Announcer.gd looks up at runtime, since that reads the actual GDScript
+# string with the real em dash — those lines would never have played).
+_ESCAPES = {'\\n': '\n', '\\t': '\t', '\\"': '"', "\\'": "'", '\\\\': '\\'}
+
+
+def _unescape(s: str) -> str:
+    for escaped, literal in _ESCAPES.items():
+        s = s.replace(escaped, literal)
+    return s
+
+
 def parse_string_arrays(gd_path: Path) -> dict:
     text = gd_path.read_text(encoding="utf-8")
     out = {}
     for name, body in CONST_ARRAY_RE.findall(text):
-        out[name] = [s.encode().decode("unicode_escape") for s in STRING_RE.findall(body)]
+        out[name] = [_unescape(s) for s in STRING_RE.findall(body)]
     return out
+
+
+def render_template(template: str, names: list) -> list:
+    """Expand one template into every line worth caching for it."""
+    placeholders = template.count("%d")
+    if placeholders > 0:
+        # Numeric (post-position) template: bounded permutations of
+        # 1..FIELD_SIZE, order matters (1st/2nd/3rd are different slots).
+        return [
+            template % combo
+            for combo in itertools.permutations(range(1, FIELD_SIZE + 1), placeholders)
+        ]
+    if "%s" in template:
+        return [template % n for n in names]
+    return [template]
 
 
 def build_jobs(templates: dict, names: list) -> list:
@@ -81,8 +136,7 @@ def build_jobs(templates: dict, names: list) -> list:
     seen = set()
     for bank, excited in BANKS.items():
         for template in templates.get(bank, []):
-            renders = [template % n for n in names] if "%s" in template else [template]
-            for text in renders:
+            for text in render_template(template, names):
                 if text in seen:
                     continue
                 seen.add(text)
@@ -120,7 +174,7 @@ def main() -> int:
             if not bank_templates:
                 continue
             template = bank_templates[0]
-            text = template % names[0] if "%s" in template else template
+            text = render_template(template, names)[0]
             if text not in seen:
                 seen.add(text)
                 jobs.append((text, excited))

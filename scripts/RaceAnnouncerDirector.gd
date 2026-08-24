@@ -70,19 +70,37 @@ const RACE_START_CALLS: Array[String] = [
 	"They break from the gate!",
 ]
 ## Running-order filler, said whenever nothing else has come up in a while —
-## keeps the call constant instead of going quiet between events. Needs at
-## least 2 names; only the 3-name bank is used when a 3rd is available (see
-## _update_filler_call).
-const FILLER_CALLS_3: Array[String] = [
-	"It's %s in front, %s and %s right there in behind.",
-	"%s leads the way, tracked by %s and %s.",
-	"%s sets the pace, with %s and %s chasing hard.",
-	"Out front it's %s, %s close up, %s not far behind.",
+## keeps the call constant instead of going quiet between events.
+##
+## History: first built using post-position NUMBERS (not horse names)
+## because a "which 2-3 of up to 60 names, in which order" combinatorial
+## space wasn't practically pre-cacheable, while post positions are bounded
+## to FIELD_SIZE (8) and so permutations of 1-8 WERE cacheable — that shipped
+## as FILLER_CALLS_2/3 and got a full monthly credit run spent on it. AJ's
+## verdict after actually hearing it: "announcer says number 3 number 7
+## instead of horses name kinda annoying." Numbers are real track-caller
+## language in real life, but this game's horses have deliberately
+## characterful names (see HorseRoster.NAMES) that are a bigger part of the
+## game's voice than literal broadcast-realism is — so real names win here.
+##
+## Fix: mention exactly ONE horse per filler line instead of 2-3 — that
+## collapses the cost back to a flat per-name cost (identical shape to
+## LEADER_CALLS/MOVE_CALLS, which already prove out fine at ~60 names x a
+## few templates) instead of a permutation blowup, so real names are
+## affordable again. Alternates between the actual leader and a trailing
+## horse so it's not always narrating the same one. The old numbered
+## FILLER_CALLS_2/3 audio stays on disk unused (not deleted, per this
+## project's convention) but is no longer in generate_announcer_audio.py's
+## BANKS or referenced by _update_filler_call below.
+const FILLER_LEADER_CALLS: Array[String] = [
+	"%s continues to set the pace out front.",
+	"%s is still showing the way.",
+	"%s holds the lead through this stretch.",
 ]
-const FILLER_CALLS_2: Array[String] = [
-	"%s and %s battling up front.",
-	"It's %s just ahead of %s.",
-	"%s leads, %s right there with him.",
+const FILLER_CHASER_CALLS: Array[String] = [
+	"%s is tracking closely in behind.",
+	"%s is well positioned, not far off the pace.",
+	"%s is racing kindly just off the leaders.",
 ]
 
 var _field: Array[Horse] = []
@@ -133,12 +151,14 @@ func update(delta: float, fractions: PackedFloat32Array) -> void:
 func _update_filler_call(order: Array[int]) -> void:
 	if _filler_timer < FILLER_INTERVAL or order.size() < 2:
 		return
-	if order.size() >= 3:
-		var names3: Array = [_field[order[0]].horse_name, _field[order[1]].horse_name, _field[order[2]].horse_name]
-		_say(FILLER_CALLS_3.pick_random() % names3)
+	# Alternates leader/chaser so it's not always narrating the same horse —
+	# picks a random trailing horse (not always order[1]) so which chaser
+	# gets named varies race to race too.
+	if randf() < 0.5:
+		_say(FILLER_LEADER_CALLS.pick_random() % _field[order[0]].horse_name)
 	else:
-		var names2: Array = [_field[order[0]].horse_name, _field[order[1]].horse_name]
-		_say(FILLER_CALLS_2.pick_random() % names2)
+		var chaser: int = order[1 + randi() % (order.size() - 1)]
+		_say(FILLER_CHASER_CALLS.pick_random() % _field[chaser].horse_name)
 
 func _update_leader_call(delta: float, leader: int) -> void:
 	if leader == _leader_index:
