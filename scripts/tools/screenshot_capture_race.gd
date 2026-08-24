@@ -25,6 +25,8 @@ func _ready() -> void:
 	get_tree().root.add_child(race_track)
 	race_track.setup(field, result)
 	race_track.play()
+	for marker in race_track.horse_nodes:
+		marker.start_running() # setup() now holds an idle pose until this is called (see HorseMarker3D.start_running) — this tool wants a RUNNING shot
 
 	await get_tree().create_timer(WAIT_SECONDS).timeout
 
