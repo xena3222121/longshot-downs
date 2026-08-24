@@ -19,9 +19,12 @@ extends Node3D
 ## and tested against. The candidate files are left on disk untouched in
 ## case that model swap was intentional and worth finishing properly later
 ## with a real horse texture.
-const MODEL_PATH: String = "res://assets/horse3d/horse.glb"
+const MODEL_PATH: String = "res://assets/horse3d/candidates/horse_candidate_09_scale_fix.glb" # TEMPORARY test point, revert to horse3d/horse.glb before shipping
 const RUN_ANIMATION_CANDIDATES: Array[String] = [
 	"Gallop", "gallop", "Run", "run", "Canter", "canter", "Armature|Gallop", "Armature|Run",
+]
+const IDLE_ANIMATION_CANDIDATES: Array[String] = [
+	"Idle", "idle", "AnimalArmature|Idle",
 ]
 
 static var _cached_model: PackedScene
@@ -34,6 +37,8 @@ var _surge_trail: CPUParticles3D
 var _dust_trail: CPUParticles3D
 var _is_surging: bool = false
 var _anim_player: AnimationPlayer
+var _run_anim_name: String = ""
+var _run_anim: Animation
 var _skeleton: Skeleton3D # only set for the real model — see _build_saddle_cloth
 var _visual_root: Node3D
 var _bob_phase: float = 0.0
@@ -316,7 +321,7 @@ func _build_real_model(model: PackedScene) -> void:
 	if anim_player == null:
 		return
 	_anim_player = anim_player
-	anim_player.speed_scale = GAIT_SPEED_SCALE
+	anim_player.speed_scale = 1.0 # normal speed for the pre-race idle hold below; start_running() bumps this to GAIT_SPEED_SCALE
 
 	var anim_name: String = ""
 	for candidate in RUN_ANIMATION_CANDIDATES:
@@ -338,16 +343,47 @@ func _build_real_model(model: PackedScene) -> void:
 	var anim: Animation = anim_player.get_animation(anim_name)
 	if anim != null:
 		anim.loop_mode = Animation.LOOP_LINEAR
-	anim_player.play(anim_name)
+	_run_anim_name = anim_name
+	_run_anim = anim
 
+	# AJ: "they look stupid moving before the race starts" — setup() runs
+	# when RaceTrack3D builds the scene, well before the post-time countdown/
+	# gate-open beat (see play_with_post_time), so every horse used to start
+	# galloping in place immediately and just stood there thrashing through
+	# the whole riders-up/odds-board sequence. Hold an idle pose instead;
+	# start_running() (called by RaceTrack3D right as the gate actually
+	# opens) is what switches to the real gait. Falls back to a static first
+	# frame of the run animation (seek without play) if no idle clip exists,
+	# rather than requiring one.
+	var idle_name: String = ""
+	for candidate in IDLE_ANIMATION_CANDIDATES:
+		if anim_player.has_animation(candidate):
+			idle_name = candidate
+			break
+	if idle_name != "":
+		var idle_anim: Animation = anim_player.get_animation(idle_name)
+		if idle_anim != null:
+			idle_anim.loop_mode = Animation.LOOP_LINEAR
+		anim_player.play(idle_name)
+	elif anim != null:
+		anim_player.seek(0.0, true)
+
+## Switches from the pre-race idle hold to the actual running gait — called
+## by RaceTrack3D at the moment the gate opens, not at setup() time (see the
+## comment above where _run_anim_name is captured).
+func start_running() -> void:
+	if _anim_player == null or _run_anim_name == "":
+		return
+	_anim_player.speed_scale = GAIT_SPEED_SCALE
+	_anim_player.play(_run_anim_name)
 	# Every horse starts this clip at the same moment, at the same
 	# speed_scale — without a random phase offset they gallop in perfect
 	# lockstep (identical leg position on every horse, every frame), which
 	# reads as a synchronized toy/clone effect rather than a real herd.
 	# Jumping to a random point in the clip right away desyncs each horse's
 	# stride from the others.
-	if anim != null and anim.length > 0.0:
-		anim_player.seek(randf() * anim.length, true)
+	if _run_anim != null and _run_anim.length > 0.0:
+		_anim_player.seek(randf() * _run_anim.length, true)
 
 ## Called every playback frame by RaceTrack3D with this horse's actual
 ## ground speed that tick (RaceSim's effective_speed, straight from
