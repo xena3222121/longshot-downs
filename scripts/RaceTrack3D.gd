@@ -534,9 +534,22 @@ func play_with_post_time() -> void:
 	await broadcast_hud.play_post_time_sequence()
 	if has_audio_focus:
 		AudioManager.play_sfx("race_start_bell")
-		AudioManager.play_sfx("horse_neigh")
+		# horse_neigh.mp3 dropped from this beat: it's a raw digitized clip from
+		# craigsmith's vintage-optical-reel archive (filename "G38-15-..."), and
+		# reels from that specific collection are known to carry a spoken
+		# archival slate (the engineer voicing the reel/take number, e.g.
+		# "38-15") baked into the head of the recording, not just the whinny.
+		# AJ heard exactly that ("a guy says #15 or #16") stepping on the
+		# announcer's opening "And they're off!" line every single race, since
+		# this fired in the same breath as announcer_director.race_start()
+		# below. Cut rather than trimmed blind (no audio-editing tool in this
+		# environment to verify a trim actually removes the slate and not the
+		# whinny) — re-add a cleaner-sourced whinny later if the gate still
+		# wants one.
 	InputHints.rumble(0.3, 0.55, 0.3) # gate-open thump, felt not just heard on a connected controller
 	_open_starting_gate() # synced to the same beat as the bell above, not the announcer's opening call
+	for marker in horse_nodes:
+		marker.start_running() # holds an idle pose until exactly this beat — see HorseMarker3D.start_running()'s own comment
 	announcer_director.race_start()
 	play()
 
