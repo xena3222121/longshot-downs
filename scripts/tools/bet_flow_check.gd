@@ -8,6 +8,7 @@ extends Node
 
 func _ready() -> void:
 	_check_odds_table_unit_cases()
+	_check_went_broke_timing()
 
 	Bankroll.autosave_enabled = false # never let these fake trials touch the real save file
 	var trials: int = 300
@@ -22,7 +23,7 @@ func _ready() -> void:
 		losses_by_type[bt] = 0
 
 	for t in range(trials):
-		Bankroll.balance = 1000
+		Bankroll.balance = 100000 # comfortable headroom above BET_LEVELS[0] (10000) — was 1000/BET_LEVELS[0]==100 before the min-bet bump
 		var this_bet_type: OddsTable.BetType = bet_types[t % bet_types.size()]
 		var needed: int = OddsTable.picks_required(this_bet_type)
 
@@ -36,7 +37,7 @@ func _ready() -> void:
 		betting_ui.bet_type = this_bet_type # bypass the OptionButton widget itself, same as horse selection below
 		for i in range(needed): # 1 pick for Win/Place/Show, 2/3/4 in click order for Exacta/Quinella/Trifecta/Superfecta
 			betting_ui._on_horse_selected(i)
-		betting_ui.amount_option.select(0) # BET_LEVELS[0] == 100
+		betting_ui.amount_option.select(0) # BET_LEVELS[0] == 10000
 
 		# GDScript lambdas capture locals by value, not by reference, so a
 		# plain int local wouldn't observe writes made inside the callback.
@@ -57,7 +58,7 @@ func _ready() -> void:
 
 		var accepted: bool = Bankroll.place_bet(captured.amount)
 		assert(accepted, "Bankroll should accept an affordable bet")
-		var after_stake: int = 1000 - captured.amount
+		var after_stake: int = 100000 - captured.amount
 
 		var result: RaceResult = RaceSim.simulate(field, tiers)
 		var won: bool
@@ -100,6 +101,34 @@ func _ready() -> void:
 		])
 	print("bet_flow_check: %d trials — all assertions passed" % trials)
 	get_tree().quit()
+
+## Regression check for a real bug AJ hit: betting your ENTIRE balance (e.g.
+## "All In") used to fire Bankroll.went_broke the instant the bet was
+## PLACED — before the race even played, even on a bet about to win. Fixed
+## by removing that check from place_bet entirely; went_broke now only
+## fires from pay(), called unconditionally (0 on a loss) by every
+## resolution path once a bet's outcome is actually known.
+func _check_went_broke_timing() -> void:
+	Bankroll.autosave_enabled = false
+	var went_broke_count := {"n": 0} # Dictionary wrapper — a bare int local wouldn't observe a write made inside the lambda below (this project's own documented closure-capture gotcha)
+	var on_went_broke := func(): went_broke_count.n += 1
+	Bankroll.went_broke.connect(on_went_broke)
+
+	Bankroll.balance = 10000
+	assert(Bankroll.place_bet(10000), "an all-in bet should be accepted")
+	assert(Bankroll.balance == 0, "the full balance should be staked")
+	assert(went_broke_count.n == 0, "placing an all-in bet must NOT itself fire went_broke — that's the exact bug this fixes")
+
+	Bankroll.pay(0) # every resolution path now calls pay() unconditionally, even on a total loss
+	assert(went_broke_count.n == 1, "went_broke should fire once a bet actually RESOLVES with nothing left, not when it was placed")
+
+	Bankroll.balance = 10000
+	Bankroll.place_bet(10000)
+	Bankroll.pay(20000) # a win — should never be treated as going broke
+	assert(went_broke_count.n == 1, "a winning all-in bet must never trigger went_broke")
+
+	Bankroll.went_broke.disconnect(on_went_broke)
+	print("bet_flow_check: went_broke timing (all-in bet != instant bankrupt) OK")
 
 ## Independent hand-computed oracle for OddsTable, separate from the
 ## simulation loop above — catches bugs in is_winning_bet/decimal_multiplier

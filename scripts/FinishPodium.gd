@@ -351,10 +351,14 @@ func _build_outcome_and_list(bet_context: Dictionary) -> Array[String]:
 		OddsTable.format_money(amount), description, result.field[horse_index].horse.horse_name,
 	] if horse_index < result.field.size() else description
 	if won:
-		Bankroll.pay(payout)
 		AudioManager.play_sfx("win_jingle", -8.0) # this file is mastered hot; -8dB brings it in line with everything else
 	else:
 		AudioManager.play_sfx("lose_sting", -8.0) # matches win_jingle's cut so neither outcome jolts louder than the other
+	# Unconditional (payout is 0 on a loss) — this is also the ONLY correct
+	# place Bankroll.went_broke should ever fire from: right after a bet's
+	# outcome is actually known, not when it was placed (see Bankroll.gd's
+	# own place_bet comment for the bug this fixes).
+	Bankroll.pay(payout)
 	var chip: Control = _build_outcome_chip(won, payout, bet_description)
 	chip.position = Vector2(CENTER_X - OUTCOME_CHIP_SIZE.x * 0.5, BASELINE_Y + 50.0)
 	add_child(chip)

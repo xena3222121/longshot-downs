@@ -48,14 +48,20 @@ func ensure_minimum() -> void:
 func can_afford(amount: int) -> bool:
 	return amount > 0 and amount <= balance
 
+## Real bug fixed: this used to fire went_broke itself whenever a bet spent
+## the last of the balance (e.g. "All In") — meaning the busted dialog could
+## pop up the INSTANT a bet was placed, before the race even played, even on
+## a bet that was about to win. Going broke is only real once a bet actually
+## RESOLVES with nothing left — every resolution path (FinishPodium,
+## TrackLobby._show_compact_result, RaceScheduler._resolve_background) now
+## calls pay() unconditionally (0 on a loss), so went_broke's own check
+## inside pay() below fires at the correct moment instead.
 func place_bet(amount: int) -> bool:
 	if not can_afford(amount):
 		return false
 	balance -= amount
 	balance_changed.emit(balance)
 	_save()
-	if balance <= 0:
-		went_broke.emit()
 	return true
 
 func pay(amount: int) -> void:

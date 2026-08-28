@@ -19,7 +19,9 @@ extends Control
 ## compact in-tile result (_show_compact_result) is used instead, so the
 ## full podium never blanks out a race that's still actually running.
 
-const BET_LEVELS: Array[int] = [100, 1000, 5000, 10000, 25000, 50000, 100000, 1000000]
+## AJ: "bump up the min bet amounts to 10k as the min and so on up from
+## there" — was [100, 1000, 5000, 10000, 25000, 50000, 100000, 1000000].
+const BET_LEVELS: Array[int] = [10000, 25000, 50000, 100000, 250000, 500000, 1000000]
 const SIMPLE_BET_TYPES: Array[OddsTable.BetType] = [OddsTable.BetType.WIN, OddsTable.BetType.PLACE, OddsTable.BetType.SHOW]
 const TOAST_HOLD: float = 3.0
 const TOAST_FADE: float = 0.4
@@ -592,9 +594,9 @@ func _show_compact_result(screen: int, venue_id: String, result: RaceResult, bet
 		var amount: int = bet_context.amount
 		var won: bool = OddsTable.is_winning_bet(result.finish_order, horse_index, bet_type)
 		var horse_name: String = result.field[horse_index].horse.horse_name
+		var payout: int = 0
 		if won:
-			var payout: int = OddsTable.payout(amount, result.field[horse_index].tier, bet_type)
-			Bankroll.pay(payout)
+			payout = OddsTable.payout(amount, result.field[horse_index].tier, bet_type)
 			description = "%s\n\nYOU WON %s!\n%s on %s" % [
 				Venues.label_for(venue_id).to_upper(), OddsTable.format_money(payout), OddsTable.bet_type_label(bet_type), horse_name,
 			]
@@ -602,6 +604,9 @@ func _show_compact_result(screen: int, venue_id: String, result: RaceResult, bet
 			description = "%s\n\nLost your %s %s bet\non %s." % [
 				Venues.label_for(venue_id).to_upper(), OddsTable.format_money(amount), OddsTable.bet_type_label(bet_type), horse_name,
 			]
+		# Unconditional (payout is 0 on a loss) — see Bankroll.gd's place_bet
+		# comment for why this is also the correct place went_broke fires from.
+		Bankroll.pay(payout)
 	_screen_pending_result[screen] = description
 
 func _on_compact_result_continue(screen: int) -> void:
@@ -742,16 +747,18 @@ func _on_balance_changed(_new_balance: int) -> void:
 	_update_balance_label()
 
 const BUSTED_REFILL_AMOUNT: int = 50000
+const BANKRUPT_BANNER_HOLD: float = 1.2
 
-## AJ: "when the player runs out of bankroll play a sound that sucks and ask
-## the player if they want to try again not to suck at betting on horses and
-## refills their bankroll back to 50k." Bankroll itself only reports the
-## state via went_broke — this owns the actual UI reaction, same separation
-## as every other Bankroll signal. Reuses the existing "lose_sting" cue
-## (already the game's "you lost" sound) rather than sourcing a new asset —
-## it's already exactly the "that sucked" stinger this calls for.
+## AJ: the original "you kind of suck at betting on horses" joke text "is
+## terrible logic... just get rid of that, it was really just a joke" —
+## replaced with a bankrupt title-card beat (see _show_bankrupt_banner)
+## followed by a wholesome/funny twist (an inheritance from an uncle in
+## Kentucky) instead of an insult. Bankroll itself only reports the state
+## via went_broke — this owns the actual UI reaction, same separation as
+## every other Bankroll signal.
 func _show_busted_dialog() -> void:
 	AudioManager.play_sfx("lose_sting")
+	_show_bankrupt_banner()
 
 	# Real crash hit and fixed: going broke fires synchronously from inside
 	# the bet popup's own "Place Bet" button handler (Bankroll.went_broke ->
@@ -762,19 +769,47 @@ func _show_busted_dialog() -> void:
 	# queue_free() alone isn't enough here: it only marks the bet dialog for
 	# deletion at the end of THIS frame, but popup_centered() on a new
 	# exclusive dialog checks synchronously, in the same call — so the new
-	# dialog still has to wait. Deferring the actual build/popup to the next
-	# idle frame (queued AFTER the queue_free() below, so it runs after)
+	# dialog still has to wait. Deferring the actual build/popup (now also
+	# held behind the bankrupt banner's own reveal, see BANKRUPT_BANNER_HOLD)
 	# gives the old dialog time to actually leave the tree first.
 	if _active_bet_dialog != null and is_instance_valid(_active_bet_dialog):
 		_active_bet_dialog.queue_free()
 		_active_bet_dialog = null
+	await get_tree().create_timer(BANKRUPT_BANNER_HOLD).timeout
 	_build_busted_dialog.call_deferred()
 
+## A quick punch-in "BANKRUPT!" title card — same scale/bounce shape as
+## FinishPodium's own winner banner — before the actual reveal dialog pops
+## up. AJ: "have it do like a bankrupt type of animation."
+func _show_bankrupt_banner() -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var banner := Label.new()
+	banner.text = "BANKRUPT!"
+	banner.add_theme_font_size_override("font_size", 72)
+	banner.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	banner.custom_minimum_size = Vector2(700.0, 100.0)
+	banner.position = Vector2(viewport_size.x * 0.5 - 350.0, viewport_size.y * 0.5 - 50.0)
+	banner.pivot_offset = Vector2(350.0, 50.0)
+	banner.scale = Vector2.ZERO
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner.add_theme_color_override("font_color", Color(0.95, 0.25, 0.2))
+	banner.add_theme_color_override("font_outline_color", Color(0.15, 0.02, 0.02))
+	banner.add_theme_constant_override("outline_size", 10)
+	add_child(banner)
+
+	var tween: Tween = create_tween()
+	tween.tween_property(banner, "scale", Vector2(1.2, 1.2), 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_property(banner, "scale", Vector2(1.0, 1.0), 0.15).set_trans(Tween.TRANS_SINE)
+	tween.tween_interval(max(BANKRUPT_BANNER_HOLD - 0.5, 0.0))
+	tween.tween_property(banner, "modulate:a", 0.0, 0.3)
+	tween.tween_callback(banner.queue_free)
+
 func _build_busted_dialog() -> void:
+	AudioManager.play_sfx("win_jingle", -6.0) # the reveal's own little "ta-da" — distinct from the bankrupt sting above
 	var dialog := AcceptDialog.new()
-	dialog.title = "Busted!"
-	dialog.dialog_text = "You're out of money. You kind of suck at betting on horses, ngl.\n\nWant to try again?"
-	dialog.ok_button_text = "Try Again"
+	dialog.title = "An Unexpected Inheritance"
+	dialog.dialog_text = "You're completely bankrupt...\n\n...but then a letter arrives: your uncle in Kentucky has passed, and left you %s in his will.\n\nBack in business!" % OddsTable.format_money(BUSTED_REFILL_AMOUNT)
+	dialog.ok_button_text = "Thanks, Uncle!"
 
 	add_child(dialog)
 	dialog.popup_centered()

@@ -296,7 +296,9 @@ func _resolve_background(state: VenueState, result: RaceResult) -> void:
 	var payout: int = 0
 	if won:
 		payout = OddsTable.payout(amount, result.field[horse_index].tier, bet_type)
-		Bankroll.pay(payout)
+	# Unconditional (payout is 0 on a loss) — see Bankroll.gd's place_bet
+	# comment for why this is also the correct place went_broke fires from.
+	Bankroll.pay(payout)
 	var horse_name: String = state.field[horse_index].horse_name if horse_index < state.field.size() else "?"
 	var description: String = "%s — %s %s on %s" % [
 		Venues.label_for(state.venue_id), OddsTable.format_money(amount), OddsTable.bet_type_label(bet_type), horse_name,
