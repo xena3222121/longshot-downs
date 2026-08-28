@@ -357,46 +357,14 @@ func _add_track_theme_picker(parent: Control) -> void:
 	option.item_selected.connect(func(index: int): Settings.set_track_theme_id(TrackThemes.THEME_IDS[index]))
 	row.add_child(option)
 
-## Career/meta-progression summary — current class, lifetime totals, and
-## which achievements are unlocked so far. Same AcceptDialog-with-plain-text
-## pattern as _show_credits rather than a bespoke scrollable widget; the
-## content is short enough not to need one.
+## "Stable" now leads to the actual Career/owner mode (CareerHub.gd) — buy/
+## train/race your own horse — rather than the old read-only achievements
+## dialog (that summary text still exists, relocated into CareerHub's own
+## _achievements_summary_text, reachable there via its own "Career
+## Achievements" button).
 func _show_stable() -> void:
-	var dialog := AcceptDialog.new()
-	dialog.title = "Your Stable"
-	dialog.dialog_text = _stable_summary_text()
-	add_child(dialog)
-	dialog.popup_centered()
-	dialog.get_ok_button().grab_focus.call_deferred()
-	dialog.confirmed.connect(dialog.queue_free)
-	dialog.canceled.connect(dialog.queue_free)
-
-func _stable_summary_text() -> String:
-	var lines: PackedStringArray = []
-	lines.append("Class: %s" % Career.get_current_class().name)
-	lines.append("Races run: %d" % Career.total_races)
-	lines.append("Current win streak: %d    Best streak: %d" % [Career.current_streak, Career.best_streak])
-	lines.append("")
-	lines.append("Achievements (%d/%d):" % [Career.achievements_unlocked.size(), Career.ACHIEVEMENTS.size()])
-	for id in Career.ACHIEVEMENTS.keys():
-		var unlocked: bool = Career.achievements_unlocked.has(id)
-		var mark: String = "✓" if unlocked else "-"
-		lines.append("  %s %s — %s" % [mark, Career.achievement_name(id), Career.ACHIEVEMENTS[id].description])
-
-	var records: Array = []
-	for key in Career.horse_stats.keys():
-		var stats: Dictionary = Career.horse_stats[key]
-		if int(stats.get("wins", 0)) > 0:
-			records.append({"id": int(key), "wins": int(stats.get("wins", 0)), "races": int(stats.get("races", 0))})
-	if not records.is_empty():
-		records.sort_custom(func(a, b): return a.wins > b.wins)
-		lines.append("")
-		lines.append("Winningest horses:")
-		for entry in records.slice(0, 5):
-			var horse_name: String = HorseRoster.NAMES[entry.id] if entry.id < HorseRoster.NAMES.size() else "Horse #%d" % entry.id
-			lines.append("  %s — %dW-%dR" % [horse_name, entry.wins, entry.races])
-
-	return "\n".join(lines)
+	await ScreenFade.fade_out()
+	get_tree().change_scene_to_file("res://scenes/CareerHub.tscn")
 
 func _show_credits() -> void:
 	var dialog := AcceptDialog.new()

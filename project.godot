@@ -27,6 +27,7 @@ UITheme="*res://scripts/autoload/UITheme.gd"
 ScreenFade="*res://scripts/autoload/ScreenFade.gd"
 InputHints="*res://scripts/autoload/InputHints.gd"
 RaceScheduler="*res://scripts/autoload/RaceScheduler.gd"
+CareerStable="*res://scripts/autoload/CareerStable.gd"
 
 [audio]
 

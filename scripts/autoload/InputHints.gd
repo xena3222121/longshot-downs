@@ -103,16 +103,29 @@ func _cycle_option_button(option: OptionButton, button_index: int) -> void:
 	option.select(next)
 	option.item_selected.emit(next)
 
+## CareerHub added to this allowlist alongside TrackLobby — same "no way
+## back to the title screen" gap this whole escape hatch was built to close
+## in the first place, now that Career mode is a second top-level scene a
+## player can be stuck several clicks deep in (starter pick, marketplace, a
+## live Career race). The TrackLobby-specific cleanup below only runs for
+## TrackLobby itself; CareerHub has no scheduler/ambience state to clean up.
+const RETURN_TO_TITLE_SCENES: Array[String] = [
+	"res://scenes/TrackLobby.tscn",
+	"res://scenes/CareerHub.tscn",
+]
+
 func _try_return_to_title() -> void:
 	var tree: SceneTree = get_tree()
 	if tree == null or tree.current_scene == null:
 		return
-	if tree.current_scene.scene_file_path != "res://scenes/TrackLobby.tscn":
+	var scene_path: String = tree.current_scene.scene_file_path
+	if not RETURN_TO_TITLE_SCENES.has(scene_path):
 		return
-	clear_context_hints() # in case a race was abandoned mid-flight — otherwise stale camera hints would linger into the title screen
-	AudioManager.stop_race_ambience() # safety cleanup for the same reason — otherwise the music stays ducked forever if a race never reached its own stop_race_ambience() call
-	RaceScheduler.force_finish_all_races() # otherwise any mid-flight screen's venue would stay paused forever if its race was abandoned this way
-	RaceScheduler.stop_watching() # freeze every countdown until the lobby is actually open again to receive race_ready
+	if scene_path == "res://scenes/TrackLobby.tscn":
+		clear_context_hints() # in case a race was abandoned mid-flight — otherwise stale camera hints would linger into the title screen
+		AudioManager.stop_race_ambience() # safety cleanup for the same reason — otherwise the music stays ducked forever if a race never reached its own stop_race_ambience() call
+		RaceScheduler.force_finish_all_races() # otherwise any mid-flight screen's venue would stay paused forever if its race was abandoned this way
+		RaceScheduler.stop_watching() # freeze every countdown until the lobby is actually open again to receive race_ready
 	await ScreenFade.fade_out()
 	tree.change_scene_to_file("res://scenes/TitleScreen.tscn")
 

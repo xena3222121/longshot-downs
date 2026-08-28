@@ -23,3 +23,11 @@ var surge: float = 0.0
 ## different horses in the same field settle at different distances off the
 ## pace instead of every trailing horse converging on one identical gap.
 var catchup_gap: float = 0.0
+
+## CareerStable-trained "Closing Kick" level (0 = untrained/every wild
+## horse, see RaceSim.CLOSING_KICK_SPEED_BONUS) — a flat speed bonus applied
+## ONLY in the stretch (see RaceSim.CLOSING_KICK_FRACTION_THRESHOLD), unlike
+## acceleration/stamina training (folded into base_speed/stamina at roll
+## time instead, since those represent early pace and fatigue resistance,
+## not a late-race-only effect).
+var closing_kick_level: int = 0

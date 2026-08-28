@@ -167,13 +167,41 @@ const CATCHUP_TIME: float = 3.0
 ## simulate()) rather than waiting for it to physically finish.
 const FIELD_CUTOFF_AFTER_LEADER: float = 8.0
 
+## CareerStable training hook — every value here is additive on top of the
+## normal tier/random roll below, and every existing caller (Play Now,
+## RaceScheduler's background/watched wild races) passes an empty
+## `attribute_overrides`, so wild-field balance (sim_check.gd et al) is
+## completely unaffected. Levels run 0 (untrained, same as every wild horse)
+## to CareerStable.MAX_LEVEL (5).
+## Acceleration folds straight into mean_speed, same lever tier_index
+## already uses — 1.2/level is deliberately smaller than one SPEED_STEP
+## (1.6), so even a maxed 5-level edge (+6.0) is comparable to shifting ~3-4
+## tiers, a real but not run-away advantage against wild rivals.
+const ACCELERATION_SPEED_BONUS_PER_LEVEL: float = 1.2
+## Stamina training raises the FLOOR of the stamina roll rather than shifting
+## the whole range — a trained horse still has race-to-race variance, it
+## just can't roll as badly as an untrained one. 8/level means a maxed
+## horse's worst-case roll (STAMINA_MIN + 40) sits above the wild
+## STAMINA_MAX ceiling entirely — fatigue becomes a genuine non-issue for a
+## fully-trained horse, matching "endurance" reading as solved once maxed.
+const STAMINA_LEVEL_BONUS: float = 8.0
+## Closing Kick only matters in the stretch — a flat speed add-on once a
+## horse crosses this fraction of the race (same "turning for home" moment
+## RaceAnnouncerDirector/BroadcastHUD already key off elsewhere in this
+## codebase), so a trained closer visibly makes a move late rather than
+## just being faster the whole way (that's what Acceleration is for).
+const CLOSING_KICK_FRACTION_THRESHOLD: float = 0.8
+const CLOSING_KICK_SPEED_BONUS_PER_LEVEL: float = 2.0
+
 ## Rolls fresh per-race performance for each horse in `field` and simulates
 ## the race tick by tick. `tiers[i]` is the odds tier assigned to `field[i]`
 ## (must include the "index" key set by OddsTable.assign_to_field). The tier
 ## only nudges a horse's *mean* speed — roll variance is wide enough that
-## favorites regularly lose to longshots. Returns a RaceResult with the full
-## per-tick position history for replay plus the final finish order.
-static func simulate(field: Array[Horse], tiers: Array[Dictionary]) -> RaceResult:
+## favorites regularly lose to longshots. `attribute_overrides[i]` (optional,
+## keyed by field index) is CareerStable's training hook — see the consts
+## above. Returns a RaceResult with the full per-tick position history for
+## replay plus the final finish order.
+static func simulate(field: Array[Horse], tiers: Array[Dictionary], attribute_overrides: Dictionary = {}) -> RaceResult:
 	var result := RaceResult.new()
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
@@ -183,14 +211,17 @@ static func simulate(field: Array[Horse], tiers: Array[Dictionary]) -> RaceResul
 		state.horse = field[i]
 		state.tier = tiers[i]
 
+		var overrides: Dictionary = attribute_overrides.get(i, {})
 		var tier_index: int = tiers[i].get("index", i)
 		var mean_speed: float = BASE_SPEED - tier_index * SPEED_STEP
 		if tier_index == 0:
 			mean_speed += FAVORITE_BONUS
+		mean_speed += ACCELERATION_SPEED_BONUS_PER_LEVEL * int(overrides.get("acceleration_level", 0))
 		state.base_speed = mean_speed + rng.randfn(0.0, SPEED_SIGMA)
-		state.stamina = rng.randf_range(STAMINA_MIN, STAMINA_MAX)
+		state.stamina = rng.randf_range(STAMINA_MIN, STAMINA_MAX) + STAMINA_LEVEL_BONUS * int(overrides.get("stamina_level", 0))
 		state.consistency = rng.randf_range(CONSISTENCY_MIN, CONSISTENCY_MAX)
 		state.catchup_gap = MAX_GAP_FROM_LEADER * rng.randf_range(CATCHUP_GAP_MIN_MULT, CATCHUP_GAP_MAX_MULT)
+		state.closing_kick_level = int(overrides.get("closing_kick_level", 0))
 
 		result.field.append(state)
 
@@ -223,6 +254,8 @@ static func simulate(field: Array[Horse], tiers: Array[Dictionary]) -> RaceResul
 
 				var noise: float = rng.randfn(0.0, (1.0 - state.consistency) * NOISE_SCALE)
 				effective_speed = max(state.base_speed * fatigue_mult + state.surge + noise, BASE_SPEED * 0.2)
+				if state.closing_kick_level > 0 and state.distance / TRACK_LENGTH >= CLOSING_KICK_FRACTION_THRESHOLD:
+					effective_speed += CLOSING_KICK_SPEED_BONUS_PER_LEVEL * state.closing_kick_level
 				if has_finished:
 					effective_speed *= 1.0 - (time_since_finish / COAST_DURATION) # ease down to a stop, not an abrupt cutoff
 
