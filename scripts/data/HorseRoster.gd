@@ -3,20 +3,20 @@ extends RefCounted
 
 const NAMES: Array[String] = [
 	"Midnight Runner", "Copper Comet", "Velvet Thunder", "Iron Whisper",
-	"Solar Flare", "Rusty Nickel", "Lucky Strike", "Silver Bullet",
-	"Windy Ridge", "Blazing Saddles", "Northern Fable", "Quiet Storm",
-	"Prairie Ghost", "Amber Rebellion", "Cinder Cloak", "Diesel Dream",
-	"Echo Canyon", "Frostbite Folly", "Golden Ratio", "Honest Gamble",
+	"Solar Flare", "Tequila Mockinghorse", "Lucky Strike", "Silver Bullet",
+	"Fartin' Martin", "Blazing Saddles", "Northern Fable", "Quiet Storm",
+	"Grand Theft Pony", "Amber Rebellion", "Cinder Cloak", "Diesel Dream",
+	"Sir Poops-a-Lot", "Frostbite Folly", "Golden Ratio", "Honest Gamble",
 	"Ironclad Alibi", "Jubilee Jazz", "Kettle Corn Kid", "Loose Change",
-	"Midwest Mirage", "Neon Nightfall", "Overtime Outlaw", "Paper Tiger",
-	"Quarter Moon", "Reckless Rumor", "Salty Comeback", "Thunder Tax",
-	"Umber Uproar", "Velcro Villain", "Wildcard Willow", "Xtra Mile",
-	"Yonder Bound", "Zero Hour", "Backfire Betty", "Crooked Odds",
+	"Nacho Average Horse", "Neon Nightfall", "Overtime Outlaw", "Paper Tiger",
+	"Karen's Complaint", "Reckless Rumor", "Sir Chomps-a-Lot", "Thunder Tax",
+	"Chunk Norris", "Velcro Villain", "Wildcard Willow", "Xtra Mile",
+	"Yonder Bound", "Zero Hour", "Buttcrack Bandit", "Crooked Odds",
 	"Dusty Verdict", "Emberline", "Fickle Fortune", "Gravel Road Glory",
-	"Hollow Point Hank", "Ill-Advised", "Jackrabbit Jubilee", "Kite String",
-	"Long Shot Larry", "Muddy Waters", "No Refunds", "Overdraft",
+	"Hollow Point Hank", "Whiskey Business", "Vin Diesel's Cousin", "Hoof Hearted",
+	"Long Shot Larry", "Sweaty Betty", "No Refunds", "Colonel Mustache",
 	"Pit Stop Preacher", "Quick Excuse", "Rowdy Receipt", "Devin Is A Tool",
-	"Tumbleweed Tony", "Undertow", "Vapor Trail", "Devin's Flat Footed",
+	"Tumbleweed Tony", "Undertow", "Lord Baconsworth", "Devin's Flat Footed",
 ]
 
 ## Ordinary human names, deliberately plain next to NAMES' pun-heavy horse

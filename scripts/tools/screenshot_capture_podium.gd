@@ -7,7 +7,7 @@ extends Node
 ## Must run with the REAL (non-headless) binary — headless has no GPU context:
 ##   godotsteam.441.editor.windows64.exe --path . res://scenes/tools/screenshot_capture_podium.tscn
 
-const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/3f6e8dc3-e1fd-4693-b564-475ff1cffb01/scratchpad/screenshot_podium.png"
+const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/06ae8ae0-e664-4e04-82ab-73b913e21258/scratchpad/store_podium.png"
 ## Wall-clock wait, NOT a frame count — the real (uncapped/high-fps) binary
 ## can burn through hundreds of frames in well under a second, which is
 ## exactly what happened on the first attempt at this capture (caught mid-

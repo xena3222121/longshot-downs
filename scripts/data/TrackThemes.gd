@@ -11,7 +11,7 @@ extends RefCounted
 
 const DEFAULT_THEME_ID: String = "neon_downs"
 
-const THEME_IDS: Array[String] = ["neon_downs", "desert_dusk", "storm_coast", "bluegrass_night", "classic_amber"]
+const THEME_IDS: Array[String] = ["neon_downs", "desert_dusk", "storm_coast", "bluegrass_night", "classic_amber", "golden_coast"]
 
 ## Every theme's track_surface_color (dirt) and infield_color (grass) were
 ## re-tuned toward genuinely brown/green — AJ asked for the racing SURFACE
@@ -173,6 +173,46 @@ const THEMES: Dictionary = {
 		"trim_color": Color(0.85, 0.65, 0.25),
 		"pylon_beacon_color": Color(0.9, 0.7, 0.3),
 		"flag_colors": [Color(0.85, 0.65, 0.25), Color(0.6, 0.4, 0.2)],
+	},
+	## AJ: "make it look like Del Mar... kinda like Blender graphics, not over
+	## the top, match the scale of the game." el_cid/mesa_fairgrounds are both
+	## Del Mar-inspired (see Venues.gd) but were both riding storm_coast's
+	## overcast/stormy mood, which is the opposite of Del Mar's real identity
+	## ("where the surf meets the turf" — bright coastal Southern California
+	## sun, not a gray storm front). storm_coast itself is left completely
+	## untouched (several OTHER venues use it, see Venues.gd's theme_id list),
+	## so this is a new theme rather than a re-tune of an existing one. Reuses
+	## sky_day.hdr (same bright-midday HDRI as the default theme) since that
+	## mood is exactly right here too. skyline_style/tree_style below are new
+	## opt-in keys (default "skyscraper"/"round" for every other theme, see
+	## RaceTrack3D._build_skyline/_make_tree) so only this theme swaps the
+	## distant-city skyline for coastal hills and the round shade trees for
+	## palms — every other theme's environment dressing is unaffected.
+	"golden_coast": {
+		"label": "Golden Coast Downs",
+		"rail_color": Color(0.95, 0.93, 0.86),
+		"track_surface_color": Color(0.46, 0.32, 0.19),
+		"infield_color": Color(0.22, 0.5, 0.19),
+		"sky_top": Color(0.25, 0.55, 0.85),
+		"sky_horizon": Color(0.75, 0.86, 0.93),
+		"ground_bottom": Color(0.16, 0.19, 0.13),
+		"ground_horizon": Color(0.5, 0.47, 0.36),
+		"sky_hdri": "res://assets/env/sky_day.hdr",
+		"ambient_color": Color(0.52, 0.53, 0.5),
+		"sun_color": Color(1.0, 0.97, 0.86),
+		"sun_energy": 1.4,
+		"floodlight_color": Color(1.0, 0.97, 0.9),
+		"floodlight_energy": 8.0,
+		# White Spanish-mission grandstand walls with a teal tower-roof
+		# accent — Del Mar's own real, instantly-recognizable color pairing.
+		"grandstand_lower": Color(0.88, 0.85, 0.76),
+		"grandstand_upper": Color(0.96, 0.94, 0.88),
+		"grandstand_roof": Color(0.08, 0.42, 0.44),
+		"trim_color": Color(0.1, 0.5, 0.5),
+		"pylon_beacon_color": Color(0.85, 0.42, 0.32),
+		"flag_colors": [Color(0.1, 0.5, 0.5), Color(0.85, 0.42, 0.32)],
+		"skyline_style": "coastal_hills",
+		"tree_style": "palm",
 	},
 }
 

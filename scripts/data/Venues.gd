@@ -16,6 +16,7 @@ const VENUE_IDS: Array[String] = [
 	"longshot_downs", "barton_bay", "el_cid", "silverspring_downs", "bluegrass_downs",
 	"kingsgate_crown", "tradewind_shores", "sierra_alta_peak", "limestone_ridge", "timberline_north",
 	"harborcrest_downs", "cedar_meadow", "cresthaven_shore", "prairiefield_reach",
+	"mesa_fairgrounds", "big_a_flats", "bay_gate_fields", "alamitos_flats",
 ]
 
 const VENUES: Dictionary = {
@@ -41,7 +42,7 @@ const VENUES: Dictionary = {
 		"label": "El Cid",
 		"straight_len": 110.0,
 		"inner_radius": 34.0,
-		"theme_id": "storm_coast",
+		"theme_id": "golden_coast",
 	},
 	## Saratoga-inspired — America's oldest track, an upstate NY spa town
 	## famously nicknamed "The Spa" for its mineral springs. Named for that
@@ -155,6 +156,60 @@ const VENUES: Dictionary = {
 		"straight_len": 200.0,
 		"inner_radius": 21.0,
 		"theme_id": "bluegrass_night",
+	},
+	## Del Mar-inspired, distinctly — el_cid above already carries that same
+	## real-world inspiration for its rounder, more compact shape, so this
+	## venue is deliberately a different oval (longer straights, wider turns
+	## than el_cid) rather than a re-skin of it. What makes THIS one its own
+	## thing is the scenery, not just the geometry: Del Mar's own defining
+	## real-world identity is sharing its infield with the county
+	## fairgrounds (a Ferris wheel visible over the backstretch is one of
+	## that track's most recognizable real broadcast shots) — reproduced
+	## here as this project's own original, obviously-different fairground
+	## dressing (see RaceTrack3D._build_fairgrounds_backdrop/
+	## _build_backstretch_bleachers), gated by has_fairgrounds below since
+	## it's the only venue that gets it.
+	"mesa_fairgrounds": {
+		"label": "Mesa Fairgrounds",
+		"straight_len": 155.0,
+		"inner_radius": 29.0,
+		"theme_id": "golden_coast",
+		"has_fairgrounds": true,
+	},
+	## Aqueduct-inspired — Queens, NYC, real-world nicknamed "The Big A."
+	## Named for that nickname rather than the real track's own name (same
+	## naming approach as Silverspring Downs' "The Spa" above). Long
+	## sweeping straights in a dense urban corridor, paired with the neon
+	## theme for a big-city-under-lights mood distinct from Longshot Downs/
+	## Kingsgate Crown's own use of the same theme.
+	"big_a_flats": {
+		"label": "Big A Flats",
+		"straight_len": 165.0,
+		"inner_radius": 24.0,
+		"theme_id": "neon_downs",
+	},
+	## Golden Gate Fields-inspired — San Francisco Bay waterfront, a rounder,
+	## more compact oval than Mesa Fairgrounds' own coastal shape for a
+	## distinct identity despite sharing the storm-coast mood. "Bay Gate"
+	## stands in for the real name.
+	"bay_gate_fields": {
+		"label": "Bay Gate Fields",
+		"straight_len": 118.0,
+		"inner_radius": 33.0,
+		"theme_id": "storm_coast",
+	},
+	## Los Alamitos-inspired — a real quarter-horse "bullring" track known for
+	## unusually short straights and tight, wide turns compared to a standard
+	## thoroughbred oval; the shortest straight_len of any venue here on
+	## purpose, for a genuinely different sprint-track feel rather than
+	## another variation on the standard proportions. "Alamitos" (Spanish for
+	## "little cottonwoods," the actual place name the real track sits in)
+	## stands in for the real track's own full name.
+	"alamitos_flats": {
+		"label": "Alamitos Flats",
+		"straight_len": 90.0,
+		"inner_radius": 40.0,
+		"theme_id": "desert_dusk",
 	},
 }
 

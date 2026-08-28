@@ -8,7 +8,7 @@ extends Node
 ## the REAL (non-headless) binary:
 ##   godotsteam.441.editor.windows64.exe --path . res://scenes/tools/screenshot_capture_race.tscn
 
-const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/3f6e8dc3-e1fd-4693-b564-475ff1cffb01/scratchpad/screenshot_race.png"
+const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/06ae8ae0-e664-4e04-82ab-73b913e21258/scratchpad/store_race2.png"
 const WAIT_SECONDS: float = 6.0 # real wall-clock time, not a frame count — see screenshot_capture_podium.gd's own note on why
 
 func _ready() -> void:

@@ -24,8 +24,17 @@ const DT: float = 0.05
 const MAX_TICKS: int = 3000 # 150s safety cap so a pathological roll can't hang
 
 const BASE_SPEED: float = 100.0
-const SPEED_STEP: float = 2.5   # mean speed drop per odds-tier index (favorite -> longshot)
+const SPEED_STEP: float = 1.6   # mean speed drop per odds-tier index (favorite -> longshot) — lowered from 2.5 (AJ: "double the win rate of the longest shot"), tuned empirically via sim_check.gd until tier 7 landed near 2x its old ~2.5% win rate
 const SPEED_SIGMA: float = 6.0  # roll spread; large vs SPEED_STEP so tiers overlap heavily
+## Extra flat mean-speed bonus for tier 0 (the favorite) ONLY — AJ then asked
+## for the favorite's own win rate bumped back up too ("make the favorite
+## also win by 5 percent more") without undoing the longshot boost above,
+## which a uniform SPEED_STEP increase would have done (it would have
+## widened EVERY tier gap equally, pushing tier 7 back down too). Tuned
+## empirically via sim_check.gd until tier 0 landed ~5 percentage points
+## above its post-SPEED_STEP-change level (23.4% -> ~28%, coincidentally
+## close to its original pre-change level, with tier 7 left alone).
+const FAVORITE_BONUS: float = 2.2
 
 const STAMINA_MIN: float = 60.0
 const STAMINA_MAX: float = 140.0
@@ -176,6 +185,8 @@ static func simulate(field: Array[Horse], tiers: Array[Dictionary]) -> RaceResul
 
 		var tier_index: int = tiers[i].get("index", i)
 		var mean_speed: float = BASE_SPEED - tier_index * SPEED_STEP
+		if tier_index == 0:
+			mean_speed += FAVORITE_BONUS
 		state.base_speed = mean_speed + rng.randfn(0.0, SPEED_SIGMA)
 		state.stamina = rng.randf_range(STAMINA_MIN, STAMINA_MAX)
 		state.consistency = rng.randf_range(CONSISTENCY_MIN, CONSISTENCY_MAX)

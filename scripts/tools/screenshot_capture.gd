@@ -14,7 +14,7 @@ extends Node
 ## deleting shipped tools/assets just because a particular use is done).
 
 const TARGET_SCENE: String = "res://scenes/TitleScreen.tscn"
-const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/514d116b-01e6-4c8a-a131-267597d9b18a/scratchpad/screenshot_capture.png"
+const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/06ae8ae0-e664-4e04-82ab-73b913e21258/scratchpad/store_title.png"
 const SETTLE_TIME: float = 2.5
 
 func _ready() -> void:

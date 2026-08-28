@@ -5,11 +5,11 @@ CC0 (public domain) — no attribution legally required for any of it, including
 theme — credited anyway for completeness/provenance, same as everything else below.
 
 ## theme.mp3
-- **Track:** "Calm Ambient 2 (Synthwave 15k)"
-- **Source:** https://opengameart.org/content/calm-ambient-2-synthwave-15k (direct file: https://opengameart.org/sites/default/files/002_Synthwave_15k.mp3)
-- **Author:** The Cynic Project (cynicmusic.com)
+- **Track:** "A cup of tea" (from the "lofi Compilation" pack)
+- **Source:** https://opengameart.org/content/lofi-compilation (direct file: https://opengameart.org/sites/default/files/A%20cup%20of%20tea_0.mp3)
+- **Author:** TAD (OpenGameArt.org)
 - **License:** CC0 1.0 (Public Domain) — no attribution required.
-- **Note:** Replaced the previous theme, "Cheap Speed, Think Fast" (also cynicmusic, CC0) — AJ found the upbeat rock theme annoying and asked for something chill/ambient instead. Picked this one specifically because it's CC0 like its predecessor (AJ explicitly chose a zero-attribution track once already, swapping away from a CC-BY Kevin MacLeod theme for that exact reason — kept that property rather than reintroducing an attribution requirement) and its synthwave/calm-pad character tonally matches this game's "Neon Downs" cyan/magenta broadcast-HUD visual identity (see UITheme.gd) better than a generic nature-ambience track would.
+- **Note:** Replaced the previous theme, "Calm Ambient 2 (Synthwave 15k)" (The Cynic Project, CC0) — AJ linked a specific YouTube "no copyright music" track ("In Dreamland" by Keenan Lukmanjaya/Chillpeach) and asked to use it as the title theme. That exact track wasn't used for two reasons: ripping audio off YouTube directly violates its ToS regardless of the underlying track's own license, and the track's actual listed terms require attribution ("credit given") — this project has explicitly avoided attribution-required tracks before (see this entry's own predecessor note: a CC-BY Kevin MacLeod theme was swapped away from for that exact reason). AJ chose the CC0-with-similar-vibe path when offered the choice. This track's cozy/chill lofi mood is the closest CC0 match to "In Dreamland"'s own aesthetic-lofi character found on the usual catalogs (OpenGameArt/Freesound) — direct URL verified live (returns real `audio/mpeg` content, correct Content-Length, distinct from other tracks in the same pack) before downloading, same verification discipline as every other asset in this file.
 
 ## bet_click.ogg
 - **File:** click_001.ogg from the "Interface Sounds" pack
@@ -68,7 +68,7 @@ theme — credited anyway for completeness/provenance, same as everything else b
 - **Source:** https://freesound.org/people/craigsmith/sounds/438633/ (direct file: https://cdn.freesound.org/previews/438/438633_2524442-hq.mp3)
 - **Author:** craigsmith (freesound.org)
 - **License:** CC0 1.0 (Public Domain) — no attribution required.
-- **Usage:** AJ: "its definitely missing the classic post time announcing horn blast" — this isn't the exact historic "First Call"/"Call to the Post" bugle tune specifically (a clean isolated CC0 recording of that exact melody wasn't found), but a real, high-quality vintage bugle recording rather than a synth fanfare, close enough in spirit to read as the classic pre-race horn. Played once, right as the post-time "riders up" beat begins (see RaceTrack3D.play_with_post_time) — well before the separate race_start_bell cue at the actual gate.
+- **Usage:** AJ: "its definitely missing the classic post time announcing horn blast" — this isn't the exact historic "First Call"/"Call to the Post" bugle tune specifically (a clean isolated CC0 recording of that exact melody wasn't found), but a real, high-quality vintage bugle recording rather than a synth fanfare, close enough in spirit to read as the classic pre-race horn. Briefly superseded by call_to_post.mp3 below in a later session, then reinstated as the ACTIVE cue after AJ heard that substitute and said flatly it "was not a fucking bugle" — a genuine cavalry-charge bugle call reads unambiguously as a bugle in a way a generic "military ceremony trumpet fanfare" apparently doesn't. Played once via BroadcastHUD.play_bugle_call_beat() during the ~19s "POST TIME" beat in RaceTrack3D.play_with_post_time(), between the odds board and the quick 3-2-1 countdown (hold length sized to this file's own ~18.2s runtime, since it plays the charge call twice).
 
 ## crowd_cheer.mp3
 - **Track:** "Short Crowd Cheer" — a small crowd (~40 people) applauding at a concert
@@ -76,3 +76,10 @@ theme — credited anyway for completeness/provenance, same as everything else b
 - **Author:** qubodup (freesound.org)
 - **License:** CC0 1.0 (Public Domain) — no attribution required.
 - **Usage:** layered into the finish-line celebration alongside the existing finish_fanfare/win_jingle for extra "arcade excess" spectacle.
+
+## call_to_post.mp3
+- **Track:** "Real Trumpet Fanfare 2" — trumpets from a military ceremony, extracted from official Marine Barracks Washington footage
+- **Source:** https://freesound.org/people/qubodup/sounds/855458/ (direct file: https://cdn.freesound.org/previews/855/855458_71257-hq.mp3)
+- **Author:** qubodup (freesound.org)
+- **License:** CC0 1.0 (Public Domain) — no attribution required.
+- **Usage:** AJ wanted a real "call to post" bugle moment (referencing a specific 9-second YouTube SFX video) — that exact video wasn't used since ripping audio off YouTube violates its ToS regardless of the underlying content's own copyright status (the traditional "Call to Post" melody itself is public domain, but the specific recording/upload isn't). Briefly wired in as the active cue, but AJ heard it and said flatly it "was not a fucking bugle" — a real, non-silent, correctly-triggering sound (confirmed via a PCM-level check straight off the SFX bus, ruling out a playback bug), just not one that reads as an actual bugle call. Reverted in favor of reinstating post_time_bugle.mp3 above as the active cue instead. Kept on disk unused, per this project's own convention (see post_time_bugle.mp3's own entry above for the same pattern playing out a second time, in reverse).

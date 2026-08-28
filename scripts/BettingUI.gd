@@ -154,6 +154,24 @@ func _build() -> void:
 	bet_type_option.item_selected.connect(_on_bet_type_selected)
 	type_row.add_child(bet_type_option)
 
+	var help_button := Button.new()
+	help_button.text = "?"
+	help_button.tooltip_text = "How Betting Works"
+	help_button.custom_minimum_size = Vector2(32.0, 0.0)
+	help_button.theme_type_variation = "GhostButton"
+	help_button.pressed.connect(_show_betting_tutorial)
+	type_row.add_child(help_button)
+
+	if not Settings.seen_betting_tutorial:
+		# Marked seen synchronously (not inside the deferred call below) so a
+		# rapid run of _build() calls (bet-type switching, the Daily Double
+		# second-race rebuild) can't each see the flag still false and queue
+		# up their own dialog — a real bug hit while testing this: multiple
+		# dialogs got scheduled, and _build()'s own `child.queue_free()` loop
+		# freed the earlier ones before their deferred grab_focus ran.
+		Settings.mark_betting_tutorial_seen()
+		_show_betting_tutorial.call_deferred() # deferred so the rest of _build() (bet type row, horse buttons, focus grab) finishes laying out first, same reasoning as horse_buttons[0].grab_focus below
+
 	var title := Label.new()
 	title.text = _picker_title()
 	vbox.add_child(title)
@@ -224,6 +242,31 @@ func _picker_title() -> String:
 	if needed == 1:
 		return "Pick a horse to bet on:"
 	return "Pick %d horses, in order (%s):" % [needed, ", ".join(SLOT_ORDINALS.slice(0, needed))]
+
+## Shown automatically the first time a player ever reaches this screen
+## (gated by Settings.seen_betting_tutorial) and reopenable anytime via the
+## "?" button next to the bet-type picker. Same AcceptDialog-with-plain-text
+## pattern TitleScreen already uses for Credits/Stable — this content is
+## static reference text, not interactive, so no bespoke widget is needed.
+func _show_betting_tutorial() -> void:
+	var dialog := AcceptDialog.new()
+	dialog.title = "How Betting Works"
+	dialog.dialog_text = "ODDS: shown as a fraction (e.g. 5/1) — a $2 bet at 5/1 pays $10 if it wins, plus your $2 back. Longer odds mean a bigger payout but a harder horse to hit; favorites (short odds, e.g. 2/1) pay less but win more often.\n\n" \
+		+ "WIN — your horse finishes 1st.\n" \
+		+ "PLACE — your horse finishes 1st or 2nd.\n" \
+		+ "SHOW — your horse finishes 1st, 2nd, or 3rd. Safest bet, smallest payout.\n\n" \
+		+ "EXACTA — call the 1st AND 2nd place finishers, in that exact order.\n" \
+		+ "QUINELLA — call the 1st and 2nd place finishers, in either order.\n" \
+		+ "TRIFECTA — call the top 3 finishers in exact order.\n" \
+		+ "SUPERFECTA — call the top 4 finishers in exact order. Longest odds of all.\n\n" \
+		+ "DAILY DOUBLE — pick the winner of this race AND the next one. Both have to hit."
+	add_child(dialog)
+	dialog.popup_centered()
+	if dialog.is_inside_tree():
+		dialog.get_ok_button().grab_focus.call_deferred()
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+	Settings.mark_betting_tutorial_seen()
 
 func _build_second_race_picker() -> void:
 	for child in second_race_box.get_children():

@@ -50,10 +50,20 @@ const CONFETTI_COLORS: Array[Color] = [
 ]
 
 ## Below this margin (seconds) between 1st and 2nd, it's genuinely a photo
-## finish. Above this, it's a runaway. The title banner used to hardcode
-## "PHOTO FINISH!" unconditionally — true maybe once in a while, wrong (and
-## a little absurd) every other race.
-const PHOTO_FINISH_MARGIN: float = 0.3
+## finish. Above this, it's a runaway. AJ: "everything is a photo finish,
+## make it only trigger if they finish like within a head length" — 0.3s
+## measured out to a 1.5-LENGTH margin at this project's own established
+## "1 length ≈ 0.2s" conversion (see finish_spread_check.gd's own comment)
+## — nowhere near photo-finish territory in real racing, which is why it
+## was firing on ~19% of races (measured via a throwaway 1000-trial sample:
+## debug_finish_margin_check.gd, deleted after use). A real head is roughly
+## 0.15-0.2 lengths, i.e. ~0.03-0.04s at that same conversion; landed on
+## 0.05s instead of going tighter still since the same sample showed
+## anything below ~0.03s was almost entirely exact/near-exact simulation
+## ties rather than genuine close racing, and 0.05s already gives a real,
+## rare (~3.6% of races in that sample) trigger rate without being so tight
+## it reads as broken/never-happening.
+const PHOTO_FINISH_MARGIN: float = 0.05
 const RUNAWAY_MARGIN: float = 3.0
 
 var result: RaceResult

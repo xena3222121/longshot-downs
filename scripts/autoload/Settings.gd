@@ -25,6 +25,13 @@ var track_theme_id: String = TrackThemes.DEFAULT_THEME_ID
 ## always resetting to the full grid.
 var screen_display_count: int = 4
 
+## Gates the one-time "How Betting Works" popup BettingUI shows the first
+## time a player ever reaches the bet screen — a cold $0.99 impulse buyer
+## can't be assumed to already know what odds/Exacta/Quinella mean. Persisted
+## like every other preference here so it only ever fires once per install,
+## not once per session.
+var seen_betting_tutorial: bool = false
+
 func _ready() -> void:
 	_load()
 	_apply_all()
@@ -57,6 +64,12 @@ func set_screen_display_count(count: int) -> void:
 	screen_display_count = count
 	_save()
 
+func mark_betting_tutorial_seen() -> void:
+	if seen_betting_tutorial:
+		return
+	seen_betting_tutorial = true
+	_save()
+
 func _apply_all() -> void:
 	AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Master"), linear_to_db(master_volume))
 	AudioManager.set_music_bus_volume(music_volume)
@@ -72,6 +85,7 @@ func _save() -> void:
 	cfg.set_value("display", "fullscreen", fullscreen)
 	cfg.set_value("race", "track_theme_id", track_theme_id)
 	cfg.set_value("race", "screen_display_count", screen_display_count)
+	cfg.set_value("tutorial", "seen_betting_tutorial", seen_betting_tutorial)
 	cfg.save(SETTINGS_PATH)
 
 func _load() -> void:
@@ -84,3 +98,4 @@ func _load() -> void:
 	fullscreen = cfg.get_value("display", "fullscreen", false)
 	track_theme_id = cfg.get_value("race", "track_theme_id", TrackThemes.DEFAULT_THEME_ID)
 	screen_display_count = cfg.get_value("race", "screen_display_count", 4)
+	seen_betting_tutorial = cfg.get_value("tutorial", "seen_betting_tutorial", false)

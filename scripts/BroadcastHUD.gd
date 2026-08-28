@@ -34,6 +34,59 @@ const COUNTDOWN_STEPS: Array[String] = ["RIDERS UP", "3", "2", "1"]
 const COUNTDOWN_STEP_HOLD: float = 0.55
 const COUNTDOWN_STEP_FADE: float = 0.15
 
+## AJ: "have [a bugle] play and have the horses stage" — real broadcasts cut
+## to a bugler calling the field to the post well before the tote board/
+## quick countdown, and the horses are already standing at the gate in their
+## existing idle pose throughout (see HorseMarker3D's idle-until-gate-opens
+## state, started back in _build_scene and only broken by start_running() at
+## the actual gate-open beat) — no new animation needed, "staging" here just
+## means holding on that already-idle shot for a real beat instead of
+## cutting straight to the quick countdown.
+##
+## Plays post_time_bugle.mp3 (a real cavalry-charge bugle recording,
+## already CC0/on disk from an earlier session — see ATTRIBUTION.md) rather
+## than the original call_to_post.mp3 substitute — that one loaded and
+## played real, loud, verified-non-silent audio the whole time (confirmed
+## via a PCM-level check straight off the SFX bus), but AJ heard it and
+## said flatly it "was not a fucking bugle" — a content-mismatch, not a
+## playback bug, no amount of ducking/volume fixing was ever going to solve
+## that. post_time_bugle.mp3 runs ~18.2s (it's the "cavalry charge" call
+## played twice); BUGLE_CALL_HOLD sized to that instead of the old ~10s
+## target so it isn't cut off mid-call.
+const BUGLE_CALL_HOLD: float = 19.0
+const BUGLE_CALL_FADE: float = 0.4
+
+## `play_sfx` itself isn't gated on audio focus — the caller (RaceTrack3D,
+## which already tracks has_audio_focus for its OTHER SFX cues) decides
+## whether to actually play the sound; this function always shows the
+## banner regardless, since the visual beat should hold on every screen even
+## when only one screen's audio is actually heard.
+func play_bugle_call_beat(play_audio: bool) -> void:
+	_countdown_label.visible = true
+	_countdown_label.text = "POST TIME"
+	_countdown_label.modulate.a = 0.0
+	if play_audio:
+		# +16dB — measured, not guessed: a PCM-level check of the actual
+		# exported release binary (not just editor testing) found this
+		# specific recording peaks at only ~11.5% of full scale (peak 3773 of
+		# 32767, roughly -19dBFS) — a genuinely quiet source file, about 17dB
+		# quieter than another SFX in this project measured the same way.
+		# +6dB (an earlier guess) wasn't nearly enough to compensate; +16dB
+		# brings its peak up to roughly -3dBFS (safely below clipping — a
+		# quiet source has real headroom) without needing to touch the
+		# source file itself. This is the single most important pre-race cue
+		# in the whole game (AJ: "the bugle is literally the most important
+		# sound to signify post time"), on top of duck_music_for_post_time's
+		# own ducking, not relying on either alone to make it stand out.
+		AudioManager.play_sfx("post_time_bugle", 16.0)
+	var fade_in: Tween = create_tween()
+	fade_in.tween_property(_countdown_label, "modulate:a", 1.0, BUGLE_CALL_FADE)
+	await get_tree().create_timer(BUGLE_CALL_HOLD - BUGLE_CALL_FADE).timeout
+	var fade_out: Tween = create_tween()
+	fade_out.tween_property(_countdown_label, "modulate:a", 0.0, BUGLE_CALL_FADE)
+	await get_tree().create_timer(BUGLE_CALL_FADE).timeout
+	_countdown_label.visible = false
+
 ## Same world-scale derivation as RaceSim.MAX_GAP_FROM_LEADER's comment
 ## (rail-lane perimeter ~443 world units/lap -> ~8.8 sim-units per
 ## world-unit) — turns the leader's sim speed into a plausible-looking

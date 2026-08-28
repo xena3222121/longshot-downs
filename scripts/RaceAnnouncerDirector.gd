@@ -10,9 +10,13 @@ extends RefCounted
 ## unavailable) and BroadcastHUD.show_commentary (on-screen caption) so the
 ## call is always visible even with TTS off or muted.
 
-const LEADER_CHANGE_COOLDOWN: float = 0.7
-const LEADER_HOLD_TIME: float = 0.2 # a lead has to stick for a beat before it's worth calling — real
-	# broadcasters don't call every hair's-width position swap in a bunched pack
+const LEADER_CHANGE_COOLDOWN: float = 3.0 # was 0.7 — too short let a leader that flickered back
+	# and forth in a bunched pack (tick noise, not a real pass) get re-announced every second or
+	# so, which is what produced "Dingus leads the pack" three times in quick succession.
+const LEADER_HOLD_TIME: float = 1.0 # was 0.2 — matches the "sustained" (held >=1s) definition
+	# lead_change_check.gd already uses elsewhere in this codebase (see project memory) to tell a
+	# real pass from meaningless tick-to-tick flicker; a hair's-width swap that reverses within a
+	# second no longer gets called at all now.
 const MOVE_COOLDOWN: float = 0.9
 const MIN_LINE_GAP: float = 0.45 # floor between ANY two lines regardless of source — a real track
 	# announcer is talking almost the entire race, not pausing between calls
@@ -64,6 +68,14 @@ const PHOTO_WIN_CALLS: Array[String] = [
 	"%s gets the nod in a photo finish!",
 	"%s just gets there first — what a finish!",
 ]
+## Every entry here MUST have a real cached voice clip in
+## assets/audio/announcer/manifest.json — Announcer.say() has no OS-TTS
+## fallback (deliberately, see its own class comment), so an uncached line
+## silently falls back to text-only captioning with no voice at all. "And
+## away they go!" was added here for one session then reverted after
+## checking the manifest and finding it was never rendered — a real,
+## confirmed cause of AJ sometimes hearing nothing at race start (a 1-in-4
+## chance of landing on a caption-only line every single race).
 const RACE_START_CALLS: Array[String] = [
 	"And they're off!",
 	"Here we go!",
@@ -116,6 +128,7 @@ var _filler_timer: float = 0.0
 var _announced_turn: bool = false
 var _announced_stretch: bool = false
 var _announced_duel: bool = false
+var _last_leader_template: String = ""
 
 ## Live-toggleable by RaceTrack3D/TrackLobby (not just set once in setup) —
 ## with several venues racing at once on separate screens, only the one
@@ -173,7 +186,9 @@ func _update_leader_call(delta: float, leader: int) -> void:
 		return
 	_leader_index = leader
 	_leader_cooldown = LEADER_CHANGE_COOLDOWN
-	_say(LEADER_CALLS.pick_random() % _field[leader].horse_name)
+	var template: String = _pick_avoiding(LEADER_CALLS, _last_leader_template)
+	_last_leader_template = template
+	_say(template % _field[leader].horse_name)
 
 func _update_phase_calls(leader_fraction: float) -> void:
 	if not _announced_turn and leader_fraction >= TURNING_FOR_HOME_FRACTION:
@@ -222,6 +237,16 @@ func on_finish(result: RaceResult) -> void:
 	# stacking a second full-volume crowd cheer right on top of that one is
 	# exactly what made the finish read as "crazy loud."
 	_say(bank.pick_random() % winner.horse_name, true, true)
+
+## Rerolls once against `bank` if the first pick matches `last` verbatim, so
+## the same leader taking the lead back-to-back at least gets different
+## phrasing rather than the literal same line twice — a single reroll is
+## enough since a 3+-line bank makes a second consecutive collision rare.
+func _pick_avoiding(bank: Array[String], last: String) -> String:
+	var choice: String = bank.pick_random()
+	if bank.size() > 1 and choice == last:
+		choice = bank.pick_random()
+	return choice
 
 func _sorted_indices(fractions: PackedFloat32Array) -> Array[int]:
 	var order: Array[int] = []

@@ -119,7 +119,8 @@ var playback_time: float = 0.0
 var playing: bool = false
 
 var camera: Camera3D
-var camera_base_fov: float = 50.0
+var camera_base_fov: float = 50.0 # reverted a tighter 44 tried this session — AJ: zooming in
+	# risks making the low-poly horse model look worse up close, not better; left as-is.
 var camera_focus_fraction: float = 0.0
 var camera_look_target: Vector3 = Vector3.ZERO
 var _camera_shake_time: float = 0.0
@@ -176,6 +177,13 @@ var has_audio_focus: bool = true
 ## than deciding.
 var _is_turf: bool = false
 
+## Venue-specific extra dressing (backstretch bleachers + a fairgrounds
+## Ferris-wheel/tent backdrop) — read straight from Venues.gd's own per-venue
+## dict like STRAIGHT_LEN/INNER_RADIUS/theme_id below, not passed as a
+## separate setup() param, since it's a fixed property of the venue itself
+## rather than something that varies per-race the way _is_turf does.
+var _has_fairgrounds: bool = false
+
 func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary = {}, venue_id: String = "", p_has_audio_focus: bool = true, p_is_turf: bool = false) -> void:
 	field = p_field
 	result = p_result
@@ -183,10 +191,12 @@ func setup(p_field: Array[Horse], p_result: RaceResult, bet_context: Dictionary 
 	_venue_id = venue_id
 	has_audio_focus = p_has_audio_focus
 	_is_turf = p_is_turf
+	_has_fairgrounds = false
 	if venue_id != "":
 		var venue: Dictionary = Venues.get_venue(venue_id)
 		STRAIGHT_LEN = float(venue.get("straight_len", 140.0))
 		INNER_RADIUS = float(venue.get("inner_radius", 26.0))
+		_has_fairgrounds = bool(venue.get("has_fairgrounds", false))
 	_build_scene()
 
 ## Called live by TrackLobby when the player switches which screen they're
@@ -288,9 +298,29 @@ func _build_scene() -> void:
 
 	for i in range(field.size()):
 		var horse: Horse = field[i]
-		var start_offset: float = result.lane_offsets[0][i]
-		var start_pos: Vector3 = _sample_track(0.0, _dynamic_radius(start_offset)).position
-		var ahead_pos: Vector3 = _sample_track(0.001, _dynamic_radius(start_offset)).position
+		# AJ: "the horses [are] all stand[ing] on the same square" at the
+		# gate — real bug, not a report to dismiss. RaceSim.simulate's own
+		# lane_offsets start every horse at 0.0 for tick 0 ("all start at
+		# 0.0 (rail)", see its own comment) since the per-tick lane-merge
+		# smoothing hasn't run yet; using that tick-0 value here via
+		# _dynamic_radius put every horse at the SAME radius (and the same
+		# fraction=0.0), i.e. literally the same point in space, before the
+		# gate ever opens. Fixed by using each horse's own fixed lane index
+		# (_lane_radius(i), the same formula _build_starting_gate already
+		# uses for that horse's own gate-door position) for this INITIAL
+		# idle placement only — start_running()'s first real _apply_frame
+		# call takes over from here using the real (still tick-0, still
+		# rail-collapsed) lane_offsets, which is fine since the gate is
+		# already open and the field visibly fans back out from there
+		# within the first second or so of real movement.
+		# The "horses start behind the gate, bugle plays, then they slide
+		# forward into their stalls" post-parade beat (added earlier this
+		# session) read as "weird" in practice — AJ asked to simplify back
+		# to horses just standing in their real gate-stall position from the
+		# start, rather than chase a more elaborate loading animation this
+		# project has no walk-cycle asset to do properly. Reverted.
+		var start_pos: Vector3 = _sample_track(0.0, _lane_radius(i)).position
+		var ahead_pos: Vector3 = _sample_track(0.001, _lane_radius(i)).position
 
 		var marker := HorseMarker3D.new()
 		add_child(marker)
@@ -484,20 +514,17 @@ func _build_camera() -> void:
 	camera.fov = camera_base_fov
 	add_child(camera)
 
-	# Shallow depth of field — a real telephoto broadcast lens keeps the pack
-	# sharp and lets the grandstand/skyline behind them go soft, which reads
-	# as "real camera" rather than "everything in the scene is in focus" (a
-	# classic cheap-3D tell). DOF blur lives on CameraAttributes, not
-	# Environment, in Godot 4 — attached directly to this camera rather than
-	# WorldEnvironment. Distances are tuned against CAMERA_RAIL_OFFSET/
-	# CAMERA_HEIGHT (~24 units from camera to the pack) — background falloff
-	# starts well past that so the horses themselves are never at risk of
-	# blurring.
+	# Depth of field was here (a telephoto-lens "pack sharp, background soft"
+	# look) — AJ: "the blur is too much get rid of it you cant see the
+	# horses at times." The tuned distances assumed a fixed ~24-unit
+	# camera-to-pack gap (CAMERA_RAIL_OFFSET/CAMERA_HEIGHT), but the chase
+	# camera's actual distance varies a lot more than that in practice
+	# (turns, camera punches, free-look), so the pack itself was drifting
+	# into the blur zone instead of staying reliably sharp. Removed outright
+	# rather than re-tuned — "can't see the horses" is a correctness problem,
+	# not a taste call to iterate on blind.
 	var attributes := CameraAttributesPractical.new()
-	attributes.dof_blur_far_enabled = true
-	attributes.dof_blur_far_distance = 45.0
-	attributes.dof_blur_far_transition = 25.0
-	attributes.dof_blur_amount = 0.08
+	attributes.dof_blur_far_enabled = false
 	camera.attributes = attributes
 
 	camera_focus_fraction = 0.0
@@ -521,6 +548,19 @@ func _build_camera() -> void:
 ## ticking frames, instead of firing them the instant the track is built.
 func play_with_post_time() -> void:
 	await broadcast_hud.show_odds_board()
+	# "POST TIME" bugle beat, ~10s — horses already stand in their real gate-
+	# stall position throughout (see the horse-placement loop above; an
+	# earlier version of this session had them start further back and slide
+	# forward into the gate after the bugle, but that read as "weird" in
+	# practice and was reverted in favor of this simpler hold).
+	#
+	# Duck the theme music BEFORE the bugle plays, not just once the actual
+	# race starts (the old timing) — a code trace confirmed the bugle was
+	# genuinely firing but was inaudible against the still-full-volume theme
+	# track, not actually silent.
+	if has_audio_focus:
+		AudioManager.duck_music_for_post_time()
+	await broadcast_hud.play_bugle_call_beat(has_audio_focus)
 	# AJ (later session): hearing both the riders-up bugle AND the gate bell
 	# in the same pre-race sequence read as "the horn firing twice" — he
 	# wants exactly ONE horn-family cue, timed to the actual gate-open
@@ -548,15 +588,30 @@ func play_with_post_time() -> void:
 		# wants one.
 	InputHints.rumble(0.3, 0.55, 0.3) # gate-open thump, felt not just heard on a connected controller
 	_open_starting_gate() # synced to the same beat as the bell above, not the announcer's opening call
-	for marker in horse_nodes:
-		marker.start_running() # holds an idle pose until exactly this beat — see HorseMarker3D.start_running()'s own comment
 	announcer_director.race_start()
 	play()
 
+## AJ: "the other screens' horses were just sliding with no galloping
+## animation" — real bug. horse_nodes[i].start_running() used to only be
+## called from play_with_post_time(), right before ITS OWN call to play()
+## here — but join_in_progress() (the entry point for a screen that tunes
+## into a venue whose race is ALREADY underway, e.g. multi-screen simulcast
+## catching a background race mid-flight) calls play(elapsed) DIRECTLY,
+## skipping play_with_post_time() and its ceremony entirely by design (the
+## gate already opened off-screen). That left every horse marker frozen in
+## its idle-at-the-gate animation forever while _apply_frame kept moving its
+## `position` forward every tick regardless — the mesh visually slid across
+## the ground without ever switching to the gallop clip. Moved the
+## start_running() call into THIS function instead, the one true entry point
+## every playback path (fresh gate-open AND mid-race join) actually goes
+## through — safe to call even if a horse is already running (see
+## HorseMarker3D.start_running()'s own re-seek behavior, harmless either way).
 func play(start_offset: float = 0.0) -> void:
 	frame_index = 0
 	playback_time = start_offset
 	playing = true
+	for marker in horse_nodes:
+		marker.start_running()
 	if start_offset <= 0.01:
 		_shot_state = ShotState.GATE
 		_shot_state_time = 0.0
@@ -1004,6 +1059,21 @@ func _build_track_visual() -> void:
 
 	add_child(_make_fan_mesh(_track_loop_points(infield_radius), grass.tint, grass_roughness, grass.albedo, grass.normal, grass.roughness))
 	add_child(_make_ring_mesh(_track_loop_points(infield_radius), _track_loop_points(outer_radius), dirt.tint, dirt_roughness, dirt.albedo, dirt.normal, dirt.roughness))
+	# Everything past the outer rail (skyline buildings, perimeter flags, the
+	# fairgrounds/bleachers on venues that have them) previously had no
+	# ground under it at all — just the sky material's flat ground_horizon
+	# color showing through, which read as "the floor is see-through" once
+	# there was finally enough background geometry (the new fairgrounds
+	# dressing) sitting out there to notice it against. OUTER_GROUND_RADIUS
+	# reaches well past SKYLINE_RADIUS_MARGIN (55) so the skyline ring sits
+	# ON solid ground rather than right at this plane's own edge, and well
+	# past the camera's own DOF far-blur distance (45, see _build_camera)
+	# so there's no visible edge even at the farthest the camera ever
+	# resolves detail. Same grass texture/material as the infield — real
+	# tracks' surrounding grounds are grass, and reusing the material this
+	# scene already builds costs nothing extra.
+	const OUTER_GROUND_MARGIN: float = 180.0
+	add_child(_make_ring_mesh(_track_loop_points(outer_radius), _track_loop_points(outer_radius + OUTER_GROUND_MARGIN), grass.tint, grass_roughness, grass.albedo, grass.normal, grass.roughness))
 	add_child(_make_rail_mesh(_track_loop_points(infield_radius), RAIL_HEIGHT, RAIL_COLOR, 0.35))
 	add_child(_make_rail_mesh(_track_loop_points(outer_radius), RAIL_HEIGHT, RAIL_COLOR, 0.35))
 	add_child(_make_finish_line(infield_radius, outer_radius))
@@ -1174,6 +1244,9 @@ func _build_environment() -> void:
 	_build_perimeter_flags(outer_radius)
 	_build_skyline(outer_radius)
 	_build_spectators(infield_radius)
+	if _has_fairgrounds:
+		_build_backstretch_bleachers(infield_radius)
+		_build_fairgrounds_backdrop()
 
 ## A ring of simple silhouette buildings well beyond the flags — AJ asked for
 ## "buildings in the distance" instead of the flat sky just ending in
@@ -1189,12 +1262,40 @@ const SKYLINE_WIDTH: float = 6.0
 const SKYLINE_COLOR: Color = Color(0.025, 0.03, 0.045)
 const SKYLINE_WINDOW_COLOR: Color = Color(0.9, 0.82, 0.5)
 
+## "coastal_hills" swaps the distant-city skyline for low rolling hills —
+## dark skyscraper silhouettes (right, under a night/neon theme) read as a
+## backdrop error under a bright sunny coastal theme instead, where real
+## Del Mar's own backdrop is inland bluffs, not a downtown skyline. Opt-in
+## per-theme (TrackThemes' skyline_style key, default "skyscraper") so
+## every other theme's skyline is untouched.
+const HILL_MIN_HEIGHT: float = 5.0
+const HILL_MAX_HEIGHT: float = 11.0
+const HILL_COLOR: Color = Color(0.56, 0.63, 0.58) # hazy blue-green, atmospheric-perspective distant hill, not a saturated near-field green
+
 func _build_skyline(outer_radius: float) -> void:
 	var skyline_radius: float = outer_radius + SKYLINE_RADIUS_MARGIN
+	var coastal_hills: bool = String(_theme.get("skyline_style", "skyscraper")) == "coastal_hills"
 	for i in range(SKYLINE_COUNT):
 		var frac: float = float(i) / float(SKYLINE_COUNT) + randf_range(-0.01, 0.01)
 		var pos: Vector3 = _sample_track(frac, skyline_radius).position
-		add_child(_make_building(pos))
+		add_child(_make_coastal_hill(pos) if coastal_hills else _make_building(pos))
+
+func _make_coastal_hill(pos: Vector3) -> Node3D:
+	var hill := Node3D.new()
+	hill.position = pos
+
+	var height: float = randf_range(HILL_MIN_HEIGHT, HILL_MAX_HEIGHT)
+	var width: float = height * randf_range(2.4, 3.4)
+	var mound := MeshInstance3D.new()
+	var mesh := SphereMesh.new()
+	mesh.radius = width * 0.5
+	mesh.height = height * 2.0 # half buried at y=0 so only a dome of the intended `height` shows above ground
+	mound.mesh = mesh
+	var shade: float = randf_range(0.9, 1.1)
+	mound.material_override = _make_material(Color(HILL_COLOR.r * shade, HILL_COLOR.g * shade, HILL_COLOR.b * shade), 0.95)
+	hill.add_child(mound)
+
+	return hill
 
 func _make_building(pos: Vector3) -> Node3D:
 	var building := Node3D.new()
@@ -1370,9 +1471,68 @@ func _build_trees(infield_radius: float) -> void:
 		var dist_from_grandstand: float = abs(fposmod(frac - GRANDSTAND_FRACTION + 0.5, 1.0) - 0.5)
 		if dist_from_grandstand < TREE_CLEAR_FRACTION_HALF_WIDTH:
 			continue # stay clear of the grandstand's footprint
+		if _has_fairgrounds:
+			var dist_from_bleachers: float = abs(fposmod(frac - BLEACHER_FRACTION + 0.5, 1.0) - 0.5)
+			if dist_from_bleachers < TREE_CLEAR_FRACTION_HALF_WIDTH:
+				continue # stay clear of the backstretch bleachers' footprint too, this venue only
 		var r: float = lerp(4.0, max_tree_radius, randf())
 		var pos: Vector3 = _sample_track(frac, r).position
-		add_child(_make_tree(pos))
+		if String(_theme.get("tree_style", "round")) == "palm":
+			add_child(_make_palm_tree(pos))
+		else:
+			add_child(_make_tree(pos))
+
+## Opt-in per-theme (TrackThemes' tree_style key, default "round") — round
+## leafy-canopy trees don't fit a sunny coastal theme the way palms do. Same
+## "flat local space, no need for anything fancier" shape language as the
+## round tree: a tall thin trunk plus a fan of flat frond blades radiating
+## outward and drooping from a single crown point.
+const PALM_TRUNK_HEIGHT: float = 4.6
+const PALM_TRUNK_TOP_RADIUS: float = 0.11
+const PALM_TRUNK_BOTTOM_RADIUS: float = 0.22
+const PALM_TRUNK_COLOR: Color = Color(0.45, 0.34, 0.2)
+const PALM_FROND_COUNT: int = 7
+const PALM_FROND_LENGTH: float = 2.0
+const PALM_FROND_WIDTH: float = 0.35
+const PALM_FROND_THICKNESS: float = 0.05
+const PALM_FROND_DROOP_DEGREES: float = 35.0
+const PALM_FROND_COLOR: Color = Color(0.2, 0.5, 0.22)
+
+func _make_palm_tree(pos: Vector3) -> Node3D:
+	var tree := Node3D.new()
+	tree.position = pos
+	tree.rotation.y = randf_range(0.0, TAU)
+	tree.scale = Vector3.ONE * randf_range(0.85, 1.25)
+
+	var trunk := MeshInstance3D.new()
+	var trunk_mesh := CylinderMesh.new()
+	trunk_mesh.top_radius = PALM_TRUNK_TOP_RADIUS
+	trunk_mesh.bottom_radius = PALM_TRUNK_BOTTOM_RADIUS
+	trunk_mesh.height = PALM_TRUNK_HEIGHT
+	trunk.mesh = trunk_mesh
+	trunk.position = Vector3(0.0, PALM_TRUNK_HEIGHT * 0.5, 0.0)
+	trunk.rotation.z = randf_range(-0.12, 0.12) # a slight natural lean, no two palms perfectly vertical
+	trunk.material_override = _make_material(PALM_TRUNK_COLOR, 0.85)
+	tree.add_child(trunk)
+
+	var crown := Node3D.new()
+	crown.position = Vector3(0.0, PALM_TRUNK_HEIGHT, 0.0)
+	tree.add_child(crown)
+	for i in range(PALM_FROND_COUNT):
+		var pivot := Node3D.new()
+		pivot.rotation.y = (float(i) / float(PALM_FROND_COUNT)) * TAU + randf_range(-0.08, 0.08)
+		pivot.rotation.x = deg_to_rad(PALM_FROND_DROOP_DEGREES + randf_range(-5.0, 5.0))
+		crown.add_child(pivot)
+
+		var frond := MeshInstance3D.new()
+		var frond_mesh := BoxMesh.new()
+		frond_mesh.size = Vector3(PALM_FROND_WIDTH, PALM_FROND_THICKNESS, PALM_FROND_LENGTH)
+		frond.mesh = frond_mesh
+		frond.position = Vector3(0.0, 0.0, -PALM_FROND_LENGTH * 0.5) # extends outward along local -Z, then the pivot's own rotation aims it out/down
+		frond.material_override = _make_material(PALM_FROND_COLOR, 0.8)
+		pivot.add_child(frond)
+
+	return tree
 
 func _make_tree(pos: Vector3) -> Node3D:
 	var tree := Node3D.new()
@@ -1502,8 +1662,7 @@ func _build_grandstand(infield_radius: float) -> void:
 	_build_grandstand_crowd(stand)
 
 const GRANDSTAND_CROWD_CARDS_PER_TIER: int = 3
-const GRANDSTAND_CROWD_CARD_WIDTH: float = 10.0
-const GRANDSTAND_CROWD_CARD_HEIGHT: float = 1.7
+const GRANDSTAND_CROWD_CARD_WIDTH: float = 10.0 # card_height is now DERIVED from this at the same aspect ratio CROWD_CARD_WIDTH/CROWD_CARD_HEIGHT already establishes, not a separate fixed constant — see _build_grandstand_crowd_on's own comment
 
 ## Every tier was previously bare chrome — an empty grandstand undercuts the
 ## "real broadcast" read as much as an empty infield does. Same billboard
@@ -1516,6 +1675,164 @@ const GRANDSTAND_CROWD_CARD_HEIGHT: float = 1.7
 ## tiers worth building, so this simply skips rather than substituting
 ## something else.
 func _build_grandstand_crowd(stand: Node3D) -> void:
+	_build_grandstand_crowd_on(stand, GRANDSTAND_TIERS, GRANDSTAND_TIER_HEIGHT, GRANDSTAND_TIER_DEPTH, GRANDSTAND_LENGTH)
+
+## Venue-specific extras (_has_fairgrounds only, currently just Mesa
+## Fairgrounds — see Venues.gd) — open bleacher seating on the BACK straight,
+## opposite side of the oval from the main grandstand, plus a fairgrounds
+## Ferris-wheel/tent backdrop looming behind the grandstand itself. AJ asked
+## for "bleachers on the sides and a fairgrounds background... as the
+## backdrop of this horse venue" when this venue was built as a Del Mar-
+## inspired track (Del Mar's own real-world identity is literally sharing
+## its infield with the county fairgrounds — a Ferris wheel visible over the
+## backstretch is one of that track's most recognizable real broadcast
+## shots) — obviously different geometry/names throughout, per that same ask.
+##
+## Same straight-sided-box-in-local-space approach as _build_grandstand (see
+## its own header comment for why that's only valid on a straight section),
+## just mirrored to the BACK straight instead of the front one. Simpler than
+## the grandstand on purpose (3 open tiers, no roof/struts) — real trackside
+## bleachers vs. the clubhouse-style main grandstand.
+const BLEACHER_FRACTION: float = 0.65 # centered well inside the back straight — see this function's own placement math in the header comment above
+const BLEACHER_CENTER_RADIUS: float = 15.0
+const BLEACHER_LENGTH: float = 26.0
+const BLEACHER_TIERS: int = 3
+const BLEACHER_TIER_HEIGHT: float = 1.4
+const BLEACHER_TIER_DEPTH: float = 1.8
+
+func _build_backstretch_bleachers(infield_radius: float) -> void:
+	if BLEACHER_CENTER_RADIUS + BLEACHER_TIER_DEPTH * BLEACHER_TIERS >= infield_radius:
+		return # same safety guard as _build_grandstand, in case field size ever shrinks infield_radius below what this needs
+
+	var stand := Node3D.new()
+	stand.position = _sample_track(BLEACHER_FRACTION, BLEACHER_CENTER_RADIUS).position
+	# The back straight runs the opposite winding direction from the front
+	# one (_sample_track's own s-math: x decreases with s here, vs.
+	# increasing on the front straight) — a 180° turn keeps each tier's
+	# local +X "front row" facing back toward the track/camera instead of
+	# away from it, and z_offset below can stay the same sign convention
+	# _build_grandstand already uses ("steps back toward center as it rises").
+	stand.rotation.y = PI
+	add_child(stand)
+
+	for tier in range(BLEACHER_TIERS):
+		var block := MeshInstance3D.new()
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(BLEACHER_LENGTH, BLEACHER_TIER_HEIGHT, BLEACHER_TIER_DEPTH)
+		block.mesh = mesh
+		var y: float = BLEACHER_TIER_HEIGHT * (float(tier) + 0.5)
+		var z_offset: float = -BLEACHER_TIER_DEPTH * 0.5 * float(tier)
+		block.position = Vector3(0.0, y, z_offset)
+		var t: float = float(tier) / float(max(BLEACHER_TIERS - 1, 1))
+		block.material_override = _make_material(GRANDSTAND_COLOR_LOWER.lerp(GRANDSTAND_COLOR_UPPER, t), 0.35)
+		stand.add_child(block)
+
+		var trim := MeshInstance3D.new()
+		var trim_mesh := BoxMesh.new()
+		trim_mesh.size = Vector3(BLEACHER_LENGTH, 0.08, 0.08)
+		trim.mesh = trim_mesh
+		trim.position = Vector3(0.0, y + BLEACHER_TIER_HEIGHT * 0.5, z_offset + BLEACHER_TIER_DEPTH * 0.5)
+		trim.material_override = _make_material(GRANDSTAND_TRIM_COLOR, 0.4, null, GRANDSTAND_TRIM_COLOR, 2.0)
+		stand.add_child(trim)
+
+	_build_grandstand_crowd_on(stand, BLEACHER_TIERS, BLEACHER_TIER_HEIGHT, BLEACHER_TIER_DEPTH, BLEACHER_LENGTH)
+
+## _build_grandstand_crowd itself is hardcoded to the GRANDSTAND_* constants
+## — generalized into this parameterized version so the bleachers above can
+## reuse the exact same billboard-crowd technique against their own (smaller)
+## tier dimensions instead of duplicating the whole function body. Behavior
+## for the original call site is unchanged (it just forwards the GRANDSTAND_*
+## constants it already used inline).
+func _build_grandstand_crowd_on(stand: Node3D, tiers: int, tier_height: float, tier_depth: float, length: float) -> void:
+	var texture: Texture2D = _get_cached_texture(CROWD_BILLBOARD_PATH)
+	if texture == null:
+		return
+
+	# AJ: "the scaling on the people in the stands sucks" — real bug: this
+	# card used a FIXED height (GRANDSTAND_CROWD_CARD_HEIGHT, a ~5.88:1
+	# width:height ratio) regardless of card_width, which itself gets
+	# clamped narrower on shorter tiers (length / CARDS_PER_TIER, e.g. the
+	# Mesa Fairgrounds bleachers). The source texture's own native aspect is
+	# ~3.2:1 (see CROWD_CARD_WIDTH/CROWD_CARD_HEIGHT above, which correctly
+	# preserves it for the infield spectator cards) — using a mismatched
+	# fixed height here stretched/squished the same painted crowd image
+	# non-uniformly, worse the narrower card_width got clamped. Fixed by
+	# deriving height from card_width at the SAME aspect ratio the infield
+	# cards already use, instead of a second, inconsistent hardcoded height.
+	var card_width: float = min(GRANDSTAND_CROWD_CARD_WIDTH, length / float(GRANDSTAND_CROWD_CARDS_PER_TIER))
+	var card_height: float = card_width * (CROWD_CARD_HEIGHT / CROWD_CARD_WIDTH)
+	var mesh_instance := MultiMeshInstance3D.new()
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	var quad := QuadMesh.new()
+	quad.size = Vector2(card_width, card_height)
+	quad.material = _make_billboard_material(texture)
+	multimesh.mesh = quad
+	multimesh.instance_count = tiers * GRANDSTAND_CROWD_CARDS_PER_TIER
+
+	var idx: int = 0
+	for tier in range(tiers):
+		var y: float = tier_height * (float(tier) + 0.85)
+		var z_offset: float = -tier_depth * 0.5 * float(tier) + tier_depth * 0.3
+		for c in range(GRANDSTAND_CROWD_CARDS_PER_TIER):
+			var t: float = float(c) / float(max(GRANDSTAND_CROWD_CARDS_PER_TIER - 1, 1))
+			var x: float = lerp(-length * 0.5 + card_width * 0.5, length * 0.5 - card_width * 0.5, t)
+			multimesh.set_instance_transform(idx, Transform3D(Basis(), Vector3(x, y, z_offset)))
+			idx += 1
+
+	mesh_instance.multimesh = multimesh
+	stand.add_child(mesh_instance)
+
+## Ferris wheel + a few striped fair tents, positioned deeper in the infield
+## than the grandstand (smaller radius = further from the outer rail = further
+## from the camera, which always sits just outside it — see
+## _build_environment's own header comment on why that reads as "background"
+## rather than an obstruction) at the SAME fraction as the grandstand, so it
+## naturally looms up behind the grandstand's roofline (roof height 8.5) from
+## the camera's usual angle, exactly like Del Mar's real fairgrounds midway is
+## visible over the grandstand in real broadcast shots of that track.
+const FAIRGROUNDS_RADIUS: float = 7.0
+
+## First version of this positioned the wheel via its own separate
+## _sample_track(GRANDSTAND_FRACTION, FAIRGROUNDS_RADIUS) call — but
+## _sample_track's straight-segment X depends on the PERIMETER, which
+## depends on the radius passed in (perimeter = 2*straight_len +
+## 2*PI*radius) — so the same fraction at a different radius lands at a
+## different X, drifting the whole fairgrounds cluster sideways relative to
+## the grandstand instead of sitting directly behind it. Fixed by reusing
+## the grandstand's OWN already-computed X directly (same fraction, radius
+## GRANDSTAND_CENTER_RADIUS) and only changing Z/depth, which keeps the two
+## structures aligned regardless of straight_len.
+func _build_fairgrounds_backdrop() -> void:
+	var grandstand_pos: Vector3 = _sample_track(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS).position
+	var base_pos: Vector3 = Vector3(grandstand_pos.x, 0.0, FAIRGROUNDS_RADIUS)
+	add_child(_build_ferris_wheel(base_pos))
+	# Offsets kept OUTSIDE the grandstand's own footprint (half-width
+	# GRANDSTAND_LENGTH/2 + roof overhang ≈ 18.5) rather than directly behind
+	# it — tents/NPCs are ground-level and short (a few units tall), unlike
+	# the Ferris wheel above, which solved this same occlusion problem by
+	# growing tall enough to clear the roofline entirely. A short prop can't
+	# do that, so it has to sit beside the grandstand instead of behind it.
+	var tent_colors: Array[Color] = [Color(0.75, 0.15, 0.15), Color(0.15, 0.35, 0.7), Color(0.85, 0.75, 0.15)]
+	var tent_offsets: Array[float] = [-24.0, -21.0, 21.0, 24.0]
+	for i in range(tent_offsets.size()):
+		var pos: Vector3 = base_pos + Vector3(tent_offsets[i], 0.0, 2.0)
+		add_child(_build_fair_tent(pos, tent_colors[i % tent_colors.size()]))
+	_build_fairgrounds_crowd(base_pos)
+
+## AJ: "add some npcs" — a small midway crowd milling around the tents/wheel
+## base, same billboard-card technique (and same texture) as
+## _build_spectators, just scattered loosely across the fairgrounds footprint
+## instead of packed in a single row along the rail. Falls back to nothing
+## (not the capsule-standee legacy path _build_spectators has) if the
+## texture's missing — this is extra background flavor for one venue, not
+## load-bearing "does the infield look empty" scenery the way the main
+## grandstand crowd is.
+const FAIRGROUNDS_CROWD_COUNT: int = 8
+const FAIRGROUNDS_CROWD_CARD_WIDTH: float = 3.5
+const FAIRGROUNDS_CROWD_CARD_HEIGHT: float = 1.1 # same aspect ratio as CROWD_CARD_WIDTH/CROWD_CARD_HEIGHT (~3.2:1, the source texture's real native aspect) — was 2.0 (a mismatched ~1.75:1), stretching the same painted crowd image, same underlying bug as _build_grandstand_crowd_on's own fix
+
+func _build_fairgrounds_crowd(base_pos: Vector3) -> void:
 	var texture: Texture2D = _get_cached_texture(CROWD_BILLBOARD_PATH)
 	if texture == null:
 		return
@@ -1524,23 +1841,198 @@ func _build_grandstand_crowd(stand: Node3D) -> void:
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
 	var quad := QuadMesh.new()
-	quad.size = Vector2(GRANDSTAND_CROWD_CARD_WIDTH, GRANDSTAND_CROWD_CARD_HEIGHT)
+	quad.size = Vector2(FAIRGROUNDS_CROWD_CARD_WIDTH, FAIRGROUNDS_CROWD_CARD_HEIGHT)
 	quad.material = _make_billboard_material(texture)
 	multimesh.mesh = quad
-	multimesh.instance_count = GRANDSTAND_TIERS * GRANDSTAND_CROWD_CARDS_PER_TIER
+	multimesh.instance_count = FAIRGROUNDS_CROWD_COUNT
 
-	var idx: int = 0
-	for tier in range(GRANDSTAND_TIERS):
-		var y: float = GRANDSTAND_TIER_HEIGHT * (float(tier) + 0.85) # near the top of the tier block, reads as seated above its front edge
-		var z_offset: float = -GRANDSTAND_TIER_DEPTH * 0.5 * float(tier) + GRANDSTAND_TIER_DEPTH * 0.3 # just behind that tier's own front trim edge
-		for c in range(GRANDSTAND_CROWD_CARDS_PER_TIER):
-			var t: float = float(c) / float(max(GRANDSTAND_CROWD_CARDS_PER_TIER - 1, 1))
-			var x: float = lerp(-GRANDSTAND_LENGTH * 0.5 + GRANDSTAND_CROWD_CARD_WIDTH * 0.5, GRANDSTAND_LENGTH * 0.5 - GRANDSTAND_CROWD_CARD_WIDTH * 0.5, t)
-			multimesh.set_instance_transform(idx, Transform3D(Basis(), Vector3(x, y, z_offset)))
-			idx += 1
+	# Same "stay outside the grandstand's own footprint" reasoning as the
+	# tents in _build_fairgrounds_backdrop — a ground-level billboard this
+	# short is fully hidden if placed directly behind the grandstand's
+	# taller structure. Split into two clusters flanking left/right (near
+	# each side's pair of tents) instead of one centered scatter.
+	for i in range(FAIRGROUNDS_CROWD_COUNT):
+		var side: float = -1.0 if i % 2 == 0 else 1.0
+		var offset := Vector3(side * randf_range(19.0, 26.0), 0.0, randf_range(0.5, 3.0))
+		var pos: Vector3 = base_pos + offset + Vector3(0.0, FAIRGROUNDS_CROWD_CARD_HEIGHT * 0.5, 0.0)
+		multimesh.set_instance_transform(i, Transform3D(Basis(), pos))
 
 	mesh_instance.multimesh = multimesh
-	stand.add_child(mesh_instance)
+	add_child(mesh_instance)
+
+## Built "flat" in local XZ space (a Ferris wheel viewed face-on, like a clock
+## face lying on a table) since that's the plane every primitive here
+## naturally sizes/rotates in with plain 2D trig — then the WHOLE assembly is
+## tipped up 90° around X in one shot at the end, which rigidly preserves
+## every child's relative position/rotation. Confirmed working via an
+## isolated throwaway test (a ring of colored boxes under a rotation.x=PI/2
+## parent, screenshotted face-on) before trusting it here — this project has
+## been burned before by unverified 3D orientation assumptions.
+##
+## First real version of this used a much smaller radius/height and got hit
+## by a DIFFERENT bug entirely: the grandstand structure (closer to the
+## camera, at GRANDSTAND_CENTER_RADIUS=15) physically occluded the wheel's
+## lower half (which sat at world Y down to ~1.5, well inside the
+## grandstand's own silhouette) — not a rotation problem, a "the closer
+## opaque object is hiding the farther one" composition problem. Fixed by
+## raising the whole wheel high enough that even its BOTTOM edge
+## (HUB_HEIGHT - RADIUS) clears the grandstand's roof (GRANDSTAND_ROOF_HEIGHT
+## 8.5) with real margin, so it reads as looming above/behind the stands
+## instead of peeking through gaps in them.
+const FERRIS_WHEEL_RADIUS: float = 8.0
+const FERRIS_WHEEL_HUB_HEIGHT: float = 17.0 # bottom of wheel at 17-8=9, clears the grandstand's 8.5 roof; top reaches 25
+const FERRIS_WHEEL_SPOKE_COUNT: int = 8
+const FERRIS_WHEEL_RIM_SEGMENTS: int = 20
+const FERRIS_WHEEL_RIM_THICKNESS: float = 0.55 # was 0.35 — too thin to read as a solid ring against a bright sky, looked like loose scaffolding
+const FERRIS_WHEEL_SPOKE_THICKNESS: float = 0.32 # was 0.22, same reasoning
+const FERRIS_WHEEL_STRUCTURE_COLOR: Color = Color(0.32, 0.3, 0.28) # was near-black 0.16/0.15/0.14 — a near-black wireframe has almost no contrast against a bright daytime sky; a mid gray reads as painted steel instead
+const FERRIS_WHEEL_GONDOLA_COLORS: Array[Color] = [Color(0.9, 0.25, 0.25), Color(0.25, 0.55, 0.9), Color(0.95, 0.8, 0.2), Color(0.35, 0.8, 0.4)]
+
+func _build_ferris_wheel(base_pos: Vector3) -> Node3D:
+	var wheel := Node3D.new()
+	wheel.position = base_pos
+
+	# Two angled A-frame support towers holding the hub up off the ground —
+	# built in real 3D (not the flat-plane trick below), same simple
+	# angled-strut idea as _build_grandstand's own roof struts, just taller
+	# and with a cross-brace since this tower is much taller than that one.
+	for side in [-1.0, 1.0]:
+		var leg := MeshInstance3D.new()
+		var leg_mesh := CylinderMesh.new()
+		leg_mesh.top_radius = 0.3
+		leg_mesh.bottom_radius = 0.45
+		leg_mesh.height = FERRIS_WHEEL_HUB_HEIGHT + 1.5
+		leg.mesh = leg_mesh
+		leg.position = Vector3(side * 3.2, FERRIS_WHEEL_HUB_HEIGHT * 0.5, 0.0)
+		leg.rotation.z = side * -0.22
+		leg.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.6)
+		wheel.add_child(leg)
+
+	var brace := MeshInstance3D.new()
+	var brace_mesh := BoxMesh.new()
+	brace_mesh.size = Vector3(7.0, 0.25, 0.25)
+	brace.mesh = brace_mesh
+	brace.position = Vector3(0.0, FERRIS_WHEEL_HUB_HEIGHT * 0.55, 0.0)
+	brace.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.6)
+	wheel.add_child(brace)
+
+	# The flat "face" — rim/spokes/hub built in local XZ (Y = face normal),
+	# tipped up to stand vertically (facing the camera along its new local Z)
+	# by rotating this one sub-node 90° around X.
+	var face := Node3D.new()
+	face.position = Vector3(0.0, FERRIS_WHEEL_HUB_HEIGHT, 0.0)
+	face.rotation.x = PI * 0.5
+	wheel.add_child(face)
+
+	var hub := MeshInstance3D.new()
+	var hub_mesh := CylinderMesh.new()
+	hub_mesh.top_radius = 1.0
+	hub_mesh.bottom_radius = 1.0
+	hub_mesh.height = 0.8
+	hub.mesh = hub_mesh
+	hub.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.4)
+	face.add_child(hub)
+
+	for i in range(FERRIS_WHEEL_SPOKE_COUNT):
+		var angle: float = float(i) / float(FERRIS_WHEEL_SPOKE_COUNT) * TAU
+		var spoke := MeshInstance3D.new()
+		var spoke_mesh := BoxMesh.new()
+		spoke_mesh.size = Vector3(FERRIS_WHEEL_SPOKE_THICKNESS, FERRIS_WHEEL_SPOKE_THICKNESS, FERRIS_WHEEL_RADIUS)
+		spoke.mesh = spoke_mesh
+		# Rotating local +Z by rotation.y = theta sends it to
+		# (sin(theta), 0, cos(theta)); solving sin(theta)=cos(angle),
+		# cos(theta)=sin(angle) gives theta = PI/2 - angle, so the spoke's
+		# long (Z) axis points at (cos(angle), 0, sin(angle)) as intended —
+		# confirmed via the isolated rotation test referenced above.
+		spoke.rotation.y = PI * 0.5 - angle
+		spoke.position = Vector3(cos(angle), 0.0, sin(angle)) * (FERRIS_WHEEL_RADIUS * 0.5)
+		spoke.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.6)
+		face.add_child(spoke)
+
+	for i in range(FERRIS_WHEEL_RIM_SEGMENTS):
+		var a: float = float(i) / float(FERRIS_WHEEL_RIM_SEGMENTS) * TAU
+		var b: float = float(i + 1) / float(FERRIS_WHEEL_RIM_SEGMENTS) * TAU
+		var p_a: Vector3 = Vector3(cos(a), 0.0, sin(a)) * FERRIS_WHEEL_RADIUS
+		var p_b: Vector3 = Vector3(cos(b), 0.0, sin(b)) * FERRIS_WHEEL_RADIUS
+		var mid_angle: float = (a + b) * 0.5
+		var seg := MeshInstance3D.new()
+		var seg_mesh := BoxMesh.new()
+		seg_mesh.size = Vector3(FERRIS_WHEEL_RIM_THICKNESS, FERRIS_WHEEL_RIM_THICKNESS, p_a.distance_to(p_b) * 1.15) # generous overlap so the polygon rim reads as a continuous ring, not gapped segments
+		seg.mesh = seg_mesh
+		seg.position = (p_a + p_b) * 0.5
+		seg.rotation.y = PI * 0.5 - mid_angle
+		seg.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.5)
+		face.add_child(seg)
+
+		# A short hanger arm plus an inward-set "bucket" (AJ: "add some
+		# buckets") reads as a suspended gondola cabin rather than a cube
+		# glued flush to the rim — true gravity-correct hanging would need
+		# the bucket offset along local +Z (which maps to -Y/"down" after
+		# the face's own tip-up rotation, per this function's own derivation
+		# above), but for a static background prop at broadcast-camera
+		# distance an inward-radial offset reads close enough without that
+		# extra complexity.
+		var hanger := MeshInstance3D.new()
+		var hanger_mesh := BoxMesh.new()
+		hanger_mesh.size = Vector3(0.08, 0.08, 0.6)
+		hanger.mesh = hanger_mesh
+		hanger.position = p_a * 0.92
+		hanger.rotation.y = PI * 0.5 - a
+		hanger.material_override = _make_material(FERRIS_WHEEL_STRUCTURE_COLOR, 0.6)
+		face.add_child(hanger)
+
+		var gondola := MeshInstance3D.new()
+		var gondola_mesh := BoxMesh.new()
+		gondola_mesh.size = Vector3(1.0, 1.15, 1.0)
+		gondola.mesh = gondola_mesh
+		gondola.position = p_a * 0.82
+		var gondola_color: Color = FERRIS_WHEEL_GONDOLA_COLORS[i % FERRIS_WHEEL_GONDOLA_COLORS.size()]
+		gondola.material_override = _make_material(gondola_color, 0.5, null, gondola_color, 1.0)
+		face.add_child(gondola)
+
+	return wheel
+
+## Simple striped fair tent — a cone roof + cylinder body, one solid canvas
+## color per tent (the alternating RED/BLUE/YELLOW cluster from
+## _build_fairgrounds_backdrop is what reads as "striped midway," rather than
+## literal stripes painted on any single tent).
+const FAIR_TENT_BODY_RADIUS: float = 1.6
+const FAIR_TENT_BODY_HEIGHT: float = 2.2
+const FAIR_TENT_ROOF_HEIGHT: float = 1.8
+
+func _build_fair_tent(pos: Vector3, color: Color) -> Node3D:
+	var tent := Node3D.new()
+	tent.position = pos
+
+	var body := MeshInstance3D.new()
+	var body_mesh := CylinderMesh.new()
+	body_mesh.top_radius = FAIR_TENT_BODY_RADIUS
+	body_mesh.bottom_radius = FAIR_TENT_BODY_RADIUS
+	body_mesh.height = FAIR_TENT_BODY_HEIGHT
+	body.mesh = body_mesh
+	body.position = Vector3(0.0, FAIR_TENT_BODY_HEIGHT * 0.5, 0.0)
+	body.material_override = _make_material(Color(0.92, 0.9, 0.86), 0.8) # plain canvas-white body, the color goes on the roof
+	tent.add_child(body)
+
+	var roof := MeshInstance3D.new()
+	var roof_mesh := CylinderMesh.new() # a cone (top_radius 0) reusing the same primitive as the body
+	roof_mesh.top_radius = 0.0
+	roof_mesh.bottom_radius = FAIR_TENT_BODY_RADIUS * 1.15
+	roof_mesh.height = FAIR_TENT_ROOF_HEIGHT
+	roof.mesh = roof_mesh
+	roof.position = Vector3(0.0, FAIR_TENT_BODY_HEIGHT + FAIR_TENT_ROOF_HEIGHT * 0.5, 0.0)
+	roof.material_override = _make_material(color, 0.7)
+	tent.add_child(roof)
+
+	var pennant := MeshInstance3D.new()
+	var pennant_mesh := BoxMesh.new()
+	pennant_mesh.size = Vector3(0.08, 0.5, 0.08)
+	pennant.mesh = pennant_mesh
+	pennant.position = Vector3(0.0, FAIR_TENT_BODY_HEIGHT + FAIR_TENT_ROOF_HEIGHT + 0.25, 0.0)
+	pennant.material_override = _make_material(color, 0.4, null, color, 1.2)
+	tent.add_child(pennant)
+
+	return tent
 
 const FLAG_COUNT: int = 20
 const FLAG_RADIUS_MARGIN: float = 1.6 # beyond the outer rail

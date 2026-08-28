@@ -195,6 +195,13 @@ func _is_playstation_pad() -> bool:
 		var joy_name: String = Input.get_joy_name(id).to_lower()
 		if "sony" in joy_name or "playstation" in joy_name or "dualshock" in joy_name or "dualsense" in joy_name or "wireless controller" in joy_name:
 			return true
+		# Generic Windows HID drivers (and some DS4/DS5-passthrough tools)
+		# report bare names like "PS4 Controller"/"PS5 Controller" instead of
+		# any of the branded strings above — confirmed via AJ's own toast
+		# ("Controller Connected — PS4 Controller") showing that exact name
+		# while the hint bar still fell back to Xbox glyphs.
+		if joy_name.begins_with("ps3") or joy_name.begins_with("ps4") or joy_name.begins_with("ps5"):
+			return true
 	return false
 
 func _build_toast() -> void:

@@ -8,7 +8,7 @@ extends Node
 ## (non-headless) binary:
 ##   godotsteam.441.editor.windows64.exe --path . res://scenes/tools/screenshot_capture_gate.tscn
 
-const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/d28ea6ec-b18d-4c6c-a5f5-874a5dec842d/scratchpad/screenshot_gate.png"
+const OUT_PATH: String = "C:/Users/AJ/AppData/Local/Temp/claude/C--Users-AJ/06ae8ae0-e664-4e04-82ab-73b913e21258/scratchpad/store_gate.png"
 const WAIT_SECONDS: float = 2.5 # real wall-clock time — lets lighting/shadows/materials finish settling before capture
 
 func _ready() -> void:

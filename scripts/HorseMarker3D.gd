@@ -19,7 +19,20 @@ extends Node3D
 ## and tested against. The candidate files are left on disk untouched in
 ## case that model swap was intentional and worth finishing properly later
 ## with a real horse texture.
-const MODEL_PATH: String = "res://assets/horse3d/candidates/horse_candidate_09_scale_fix.glb" # TEMPORARY test point, revert to horse3d/horse.glb before shipping
+## A second, separate temporary-test-then-revert: MODEL_PATH was pointed at
+## assets/horse3d/candidates/horse_candidate_09_scale_fix.glb (the final
+## step of a full AI-generation/decimation/rigging pipeline aimed at fixing
+## the "hot dog horses" complaint) for live in-game review, left wired in
+## uncommitted-decision-pending. Compared side by side against a screenshot:
+## the raw model itself looked fine, but run through the REAL _tint_coat
+## pipeline below (built and tuned against the old model's specific surface
+## names/UVs) it renders as a blotchy, mottled, diseased-looking mess — worse
+## than the model it was meant to replace, not better. Reverted for that
+## reason. The candidate files stay on disk (see the comment above on why)
+## in case a future pass wants to either re-texture that model or adapt
+## _tint_coat to its actual surface layout properly instead of assuming the
+## old model's names/UVs carry over.
+const MODEL_PATH: String = "res://assets/horse3d/horse.glb"
 const RUN_ANIMATION_CANDIDATES: Array[String] = [
 	"Gallop", "gallop", "Run", "run", "Canter", "canter", "Armature|Gallop", "Armature|Run",
 ]

@@ -83,14 +83,28 @@ func stop_music() -> void:
 ## the race itself starts running (not during betting/menus), see the class
 ## comment above for why this replaces rather than layers under the theme.
 func start_race_ambience() -> void:
-	_race_duck_db = RACE_MUSIC_DUCK_DB
-	_apply_music_bus_volume()
+	duck_music_for_post_time()
 	var stream: AudioStream = _load_sound("hoofbeats_loop")
 	if stream == null:
 		return
 	_set_loop(stream, true)
 	_ambience_player.stream = stream
 	_ambience_player.play()
+
+## Just the music-ducking half of start_race_ambience, without the hoofbeats
+## ambience bed — AJ: "the bugle is literally the most important sound...
+## and away they go" for how big a deal this cue should be, but it was
+## playing against the STILL-FULL-VOLUME theme track (ducking previously
+## only ever kicked in later, when the actual race starts ticking via
+## play()/start_race_ambience) — easily masked, not actually silent, which
+## is why a code trace confirmed it firing correctly while it was
+## nonetheless hard/impossible to actually notice. Called right before the
+## bugle beat in play_with_post_time(); starting the hoofbeats bed THAT
+## early too would be wrong (horses aren't running yet, just staged at the
+## gate) — same reason that bed was pulled from active use before.
+func duck_music_for_post_time() -> void:
+	_race_duck_db = RACE_MUSIC_DUCK_DB
+	_apply_music_bus_volume()
 
 func stop_race_ambience() -> void:
 	_race_duck_db = 0.0
