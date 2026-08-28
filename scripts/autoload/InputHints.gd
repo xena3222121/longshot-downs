@@ -45,6 +45,24 @@ func _input(event: InputEvent) -> void:
 	elif event is InputEventKey or event is InputEventMouseButton or event is InputEventMouseMotion:
 		_is_gamepad_active = false
 
+	# Escape as a universal mouse/keyboard "back to title" — the gamepad
+	# Circle-button handler below was the ONLY way back to the title screen
+	# from anywhere in the game (see _try_return_to_title's own history: AJ
+	# got stuck with no way out before that existed either). AJ hit the exact
+	# same trap again in CareerHub specifically because he was on mouse/
+	# keyboard, not a controller — a screen-space "Back" button would have
+	# needed to dodge BroadcastHUD's own CanvasLayer (layer 9, drawn on top
+	# of any plain Control) during a live race, which is fragile; a global
+	# keyboard shortcut sidesteps that entirely and fixes every current and
+	# future screen at once, not just this one. Skipped while a modal dialog
+	# (Settings/Credits/Achievements) is open on the current scene so Escape
+	# closes JUST the dialog via its own native cancel behavior, not both
+	# that AND a title-screen fade at the same time.
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		if not _has_open_dialog():
+			_try_return_to_title()
+		return
+
 	if not (event is InputEventJoypadButton):
 		return
 
@@ -113,6 +131,20 @@ const RETURN_TO_TITLE_SCENES: Array[String] = [
 	"res://scenes/TrackLobby.tscn",
 	"res://scenes/CareerHub.tscn",
 ]
+
+## True if the current scene has a visible modal dialog (Settings/Credits/
+## Achievements — every one of them is added as a direct child of the
+## screen script itself, see TitleScreen._show_settings/_show_credits and
+## CareerHub._show_achievements_dialog) — used to skip the Escape-to-title
+## shortcut above so Escape closes just the dialog, not both.
+func _has_open_dialog() -> bool:
+	var tree: SceneTree = get_tree()
+	if tree == null or tree.current_scene == null:
+		return false
+	for child in tree.current_scene.get_children():
+		if child is Window and child.visible:
+			return true
+	return false
 
 func _try_return_to_title() -> void:
 	var tree: SceneTree = get_tree()

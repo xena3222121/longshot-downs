@@ -42,7 +42,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 	var race_track: RaceTrack3D = null
-	for child in hub.get_children():
+	for child in hub._view_root.get_children():
 		if child is RaceTrack3D:
 			race_track = child
 			break
@@ -61,7 +61,7 @@ func _ready() -> void:
 
 	await get_tree().process_frame # let _on_race_finished's connected handler run and rebuild into the result panel
 	var found_result_panel: bool = false
-	for child in hub.get_children():
+	for child in hub._view_root.get_children():
 		if child is CenterContainer:
 			found_result_panel = true
 	assert(found_result_panel, "finishing a Career race should rebuild the hub into a result panel")

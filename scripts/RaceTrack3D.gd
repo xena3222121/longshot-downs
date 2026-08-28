@@ -215,7 +215,6 @@ func set_audio_focus(focused: bool) -> void:
 			AudioManager.start_race_ambience()
 	else:
 		AudioManager.stop_race_ambience()
-		AudioManager.stop_crowd_swell()
 
 ## Pulls every color/light value this track's visuals depend on from either
 ## the active venue's own fixed theme (see Venues.gd — a real venue always
@@ -667,7 +666,6 @@ func _process(delta: float) -> void:
 	_apply_gait_speeds(speeds)
 	_handle_surges(surges)
 	_update_camera(delta, fractions)
-	_update_crowd_swell(fractions)
 	_update_gate_fade(playback_time)
 	broadcast_hud.update(delta, playback_time, fractions)
 	announcer_director.update(delta, fractions)
@@ -676,7 +674,6 @@ func _process(delta: float) -> void:
 		playing = false
 		if has_audio_focus:
 			AudioManager.stop_race_ambience()
-			AudioManager.stop_crowd_swell()
 		announcer_director.on_finish(result)
 		InputHints.clear_context_hints() # the podium overlay's own buttons take over Select/Back next; camera hints no longer apply
 		playback_finished.emit()
@@ -785,23 +782,15 @@ func _handle_surges(surges: PackedFloat32Array) -> void:
 		elif surges[i] < BIG_SURGE_RESET_THRESHOLD:
 			_was_big_surging[i] = false
 
-const CROWD_SWELL_START_FRACTION: float = 0.8 # final ~20% of the race
-
-## Real broadcast crowd noise isn't flat — it builds into the stretch drive.
-## AudioManager.play_crowd_reaction (duels/photo-finish/podium) was already
-## discrete one-shots; this adds a continuous bed underneath that ramps up
-## smoothly with the leader's own progress, on top of whatever one-shot cues
-## fire during the same stretch. No-ops via has_audio_focus exactly like
-## every other continuous audio source this class drives (race ambience),
-## since only one simulcast screen ever holds audio focus at a time.
-func _update_crowd_swell(fractions: PackedFloat32Array) -> void:
-	if not has_audio_focus:
-		return
-	var leader_fraction: float = 0.0
-	for f in fractions:
-		leader_fraction = max(leader_fraction, f)
-	var t: float = clamp((leader_fraction - CROWD_SWELL_START_FRACTION) / (1.0 - CROWD_SWELL_START_FRACTION), 0.0, 1.0)
-	AudioManager.set_crowd_swell_intensity(t)
+## Continuous crowd-swell bed (ramped up via AudioManager.set_crowd_swell_intensity
+## during the stretch) was tried and cut — AJ: "the audience cheering the whole
+## time is annoying," wanted crowd noise only at genuine bookend moments
+## (start/finish), not a continuous ambient layer. Removed outright rather
+## than re-tuned, matching this project's own established pattern for a cut
+## audio addition (see AudioManager.gd's own history). The discrete one-shot
+## reactions (RaceAnnouncerDirector's duel call, FinishPodium's finish cheer)
+## are untouched — those are exactly the "only at a real moment" shape AJ
+## wants, unlike the removed continuous bed.
 
 ## One horse just started a big surge — a punchy camera shake / quick FOV
 ## zoom-in, both eased back out over CAMERA_SHAKE_DURATION/

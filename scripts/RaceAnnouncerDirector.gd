@@ -27,12 +27,25 @@ const TURNING_FOR_HOME_FRACTION: float = 0.80
 const INTO_THE_STRETCH_FRACTION: float = 0.95
 const DUEL_GAP_FRACTION: float = 0.012 # top two within this much of the lap = a real photo-finish duel
 
+## Only used for the very FIRST leader of the race (breaking from the gate) —
+## there's no one to "pass" yet, so these stay leader-only. Every subsequent
+## real lead change is a genuine overtake and uses OVERTAKE_CALLS below
+## instead, which name both horses.
 const LEADER_CALLS: Array[String] = [
 	"%s takes over at the front!",
 	"It's %s showing the way now!",
 	"%s has the lead!",
 	"%s pushes to the front of this field!",
 	"%s finds room and grabs the lead!",
+]
+## AJ: "if the leader gets passed he should say that instead of just saying
+## the horse that passed is in first place — there's no mention of the
+## passing." Names both the new leader and the horse it passed.
+const OVERTAKE_CALLS: Array[String] = [
+	"%s catches and passes %s for the lead!",
+	"%s sweeps by %s to take over in front!",
+	"%s gets up to pass %s and into the lead!",
+	"%s finds a way around %s to lead this field!",
 ]
 const MOVE_CALLS: Array[String] = [
 	"%s is really turning it on!",
@@ -184,11 +197,17 @@ func _update_leader_call(delta: float, leader: int) -> void:
 	_leader_hold += delta
 	if _leader_hold < LEADER_HOLD_TIME or _leader_cooldown > 0.0:
 		return
+	var previous_leader: int = _leader_index
 	_leader_index = leader
 	_leader_cooldown = LEADER_CHANGE_COOLDOWN
-	var template: String = _pick_avoiding(LEADER_CALLS, _last_leader_template)
-	_last_leader_template = template
-	_say(template % _field[leader].horse_name)
+	if previous_leader == -1:
+		var template: String = _pick_avoiding(LEADER_CALLS, _last_leader_template)
+		_last_leader_template = template
+		_say(template % _field[leader].horse_name)
+	else:
+		var template: String = _pick_avoiding(OVERTAKE_CALLS, _last_leader_template)
+		_last_leader_template = template
+		_say(template % [_field[leader].horse_name, _field[previous_leader].horse_name])
 
 func _update_phase_calls(leader_fraction: float) -> void:
 	if not _announced_turn and leader_fraction >= TURNING_FOR_HOME_FRACTION:

@@ -16,15 +16,22 @@ const RIVAL_COUNT: int = 7
 var _content: VBoxContainer
 var _marketplace_open: bool = false
 var _balance_label: Label
+## Everything state-specific (starter pick / hub / a live race / the race
+## result) lives under this one swappable container. AJ: got trapped in the
+## menu with no way back to the title screen and had to force-close — root
+## cause was _start_race/_show_race_result each doing
+## `for child in get_children(): child.queue_free()` on the WHOLE screen,
+## wiping out the back button along with everything else, so once a race
+## started (or finished) there was no escape short of the "Continue" button
+## eventually appearing. The back button/balance label/vignette below are
+## now built ONCE in _ready() as permanent chrome that's never torn down;
+## every view-building function only clears/replaces _view_root's children.
+var _view_root: Control
 
 func _ready() -> void:
 	ScreenFade.fade_in()
 	CareerStable.process_daily_trainer_upkeep()
-	_build()
 
-func _build() -> void:
-	for child in get_children():
-		child.queue_free()
 	add_child(UITheme.make_vignette_overlay())
 
 	var back_btn := Button.new()
@@ -42,10 +49,25 @@ func _build() -> void:
 	_refresh_balance_label()
 	add_child(_balance_label)
 
+	_view_root = Control.new()
+	_view_root.anchor_right = 1.0
+	_view_root.anchor_bottom = 1.0
+	_view_root.mouse_filter = Control.MOUSE_FILTER_PASS
+	add_child(_view_root)
+
+	_build()
+
+func _clear_view() -> void:
+	for child in _view_root.get_children():
+		child.queue_free()
+
+func _build() -> void:
+	_clear_view()
+
 	var center := CenterContainer.new()
 	center.anchor_right = 1.0
 	center.anchor_bottom = 1.0
-	add_child(center)
+	_view_root.add_child(center)
 
 	var panel: PanelContainer = UITheme.make_glass_panel_container()
 	panel.custom_minimum_size = Vector2(860.0, 600.0)
@@ -74,7 +96,12 @@ func _refresh_balance_label() -> void:
 	if _balance_label != null:
 		_balance_label.text = "Balance: %s" % OddsTable.format_money(Bankroll.balance)
 
+## Always reachable now, including mid-race (see _view_root's own comment) —
+## safety-cleans any in-progress race's ducked/looping audio first, same
+## "cleanup regardless of how the scene got abandoned" belt-and-suspenders
+## philosophy InputHints._try_return_to_title already uses for TrackLobby.
 func _on_back_pressed() -> void:
+	AudioManager.stop_race_ambience()
 	await ScreenFade.fade_out()
 	get_tree().change_scene_to_file("res://scenes/TitleScreen.tscn")
 
@@ -367,11 +394,10 @@ func _start_race(stable_horse_id: int) -> void:
 	var overrides: Dictionary = CareerStable.build_attribute_overrides(stable_horse_id, 0)
 	var result: RaceResult = RaceSim.simulate(field, tiers, overrides)
 
-	for child in get_children():
-		child.queue_free()
+	_clear_view()
 
 	var race_track := RaceTrack3D.new()
-	add_child(race_track)
+	_view_root.add_child(race_track)
 	race_track.setup(field, result)
 	race_track.playback_finished.connect(_on_race_finished.bind(stable_horse_id, result))
 	race_track.play_with_post_time()
@@ -392,14 +418,12 @@ func _on_race_finished(stable_horse_id: int, result: RaceResult) -> void:
 	_show_race_result(placement, earned)
 
 func _show_race_result(placement: int, earned: int) -> void:
-	for child in get_children():
-		child.queue_free()
-	add_child(UITheme.make_vignette_overlay())
+	_clear_view()
 
 	var center := CenterContainer.new()
 	center.anchor_right = 1.0
 	center.anchor_bottom = 1.0
-	add_child(center)
+	_view_root.add_child(center)
 
 	var panel: PanelContainer = UITheme.make_glass_panel_container()
 	center.add_child(panel)
