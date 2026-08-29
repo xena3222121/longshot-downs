@@ -16,6 +16,7 @@ func _ready() -> void:
 	Bankroll.autosave_enabled = false
 	Bankroll.balance = 1000000
 	CareerStable.autosave_enabled = false
+	CareerStable.current_slot = 0 # bypass the slot-picker screen — this test drives the hub's own methods directly, not real button clicks
 	CareerStable.owned_horses = {}
 	CareerStable._next_id = CareerStable.ID_START
 	CareerStable._has_picked_starter = false
@@ -28,9 +29,9 @@ func _ready() -> void:
 	assert(CareerStable.has_picked_starter(), "starter pick through the real scene should register")
 	var id: int = CareerStable.get_owned_horse_ids()[0]
 
-	hub._on_self_train_pressed(id, "stamina")
+	hub._on_self_train_pressed(id, "endurance") # a stamina-category sub-attribute
 	await get_tree().process_frame
-	assert(CareerStable.get_attribute_points(id, "stamina") > 0, "self-train through the real scene should apply")
+	assert(CareerStable.get_attribute_points(id, "endurance") > 0, "self-train through the real scene should apply")
 
 	hub._on_buy_pressed("local_bred")
 	await get_tree().process_frame

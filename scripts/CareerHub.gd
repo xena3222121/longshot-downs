@@ -2,24 +2,28 @@ extends Control
 
 ## Phase 2 of the Career/"owner mode" system — the actual clickable screen
 ## for CareerStable.gd's Phase 1 data/economy layer. One screen handles the
-## whole loop (starter pick, training, buying a horse, racing) rather than a
-## chain of separate scene files, matching TrackLobby's "one hub + popups"
-## shape rather than a full scene transition per step — appropriate for how
-## small this MVP surface still is. No free-text input anywhere (matches
-## this game's existing zero-LineEdit Steam Deck compatibility point) —
-## every choice (trainer tier, training focus) cycles on repeated clicks
-## instead of opening a list/dropdown, which also sidesteps this project's
-## own documented OptionButton-popup-vs-gamepad bugs entirely.
+## whole loop (slot select, starter pick, training, buying a horse, racing)
+## rather than a chain of separate scene files, matching TrackLobby's "one
+## hub + popups" shape rather than a full scene transition per step —
+## appropriate for how small this MVP surface still is. No free-text input
+## anywhere (matches this game's existing zero-LineEdit Steam Deck
+## compatibility point) — every choice (trainer tier, training focus, which
+## sub-attribute to train) opens a plain scrollable list of normal focusable
+## Buttons in a popup Window (_open_selector below) rather than an
+## OptionButton dropdown, which sidesteps this project's own documented
+## OptionButton-popup-vs-gamepad bugs entirely. AJ, later: tap-to-cycle
+## buttons for trainer/focus "seemed really unintuitive... make it a screen
+## or selectable, like a dropdown" — _open_selector is that screen.
 
 const RIVAL_COUNT: int = 7
 
 var _content: VBoxContainer
 var _marketplace_open: bool = false
 var _balance_label: Label
-## Everything state-specific (starter pick / hub / a live race / the race
-## result) lives under this one swappable container. AJ: got trapped in the
-## menu with no way back to the title screen and had to force-close — root
-## cause was _start_race/_show_race_result each doing
+## Everything state-specific (slot picker / starter pick / hub / a live race
+## / the race result) lives under this one swappable container. AJ: got
+## trapped in the menu with no way back to the title screen and had to
+## force-close — root cause was _start_race/_show_race_result each doing
 ## `for child in get_children(): child.queue_free()` on the WHOLE screen,
 ## wiping out the back button along with everything else, so once a race
 ## started (or finished) there was no escape short of the "Continue" button
@@ -30,7 +34,6 @@ var _view_root: Control
 
 func _ready() -> void:
 	ScreenFade.fade_in()
-	CareerStable.process_daily_trainer_upkeep()
 
 	add_child(UITheme.make_vignette_overlay())
 
@@ -87,7 +90,9 @@ func _build() -> void:
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_content)
 
-	if not CareerStable.has_picked_starter():
+	if CareerStable.current_slot == -1:
+		_build_slot_picker()
+	elif not CareerStable.has_picked_starter():
 		_build_starter_pick()
 	else:
 		_build_hub()
@@ -121,6 +126,108 @@ func _add_body_text(text: String) -> Label:
 	_content.add_child(label)
 	return label
 
+## ---- Slot picker (multiple independent careers) ----
+##
+## AJ: every stable he'd ever started was piling up in one shared save,
+## reading as "all just commingled in one cluster" — this screen is the
+## fix: SLOT_COUNT independent careers, each with its own stable, picked
+## explicitly before anything else loads (see CareerStable.current_slot).
+
+func _build_slot_picker() -> void:
+	_add_heading("Select a Career")
+	_add_body_text("Each career keeps its own stable, completely separate from the others.")
+	for slot in range(CareerStable.SLOT_COUNT):
+		_content.add_child(_build_slot_card(slot))
+
+func _build_slot_card(slot: int) -> Control:
+	var summary: Dictionary = CareerStable.peek_slot_summary(slot)
+	var card: PanelContainer = UITheme.make_glass_panel_container()
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 14)
+	card.add_child(margin)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	margin.add_child(col)
+
+	var title := Label.new()
+	title.theme_type_variation = "EyebrowLabel"
+	title.text = "Career %d" % (slot + 1)
+	col.add_child(title)
+
+	var button_row := HFlowContainer.new()
+	button_row.add_theme_constant_override("separation", 10)
+
+	if summary.is_empty():
+		var empty_label := Label.new()
+		empty_label.text = "Empty"
+		col.add_child(empty_label)
+
+		var new_btn := Button.new()
+		new_btn.text = "Start New Career"
+		new_btn.theme_type_variation = "PrimaryButton"
+		new_btn.pressed.connect(_on_slot_new_pressed.bind(slot))
+		button_row.add_child(new_btn)
+		UITheme.add_button_juice(new_btn)
+	else:
+		var summary_label := Label.new()
+		summary_label.text = "%d horse%s   —   lead horse: %s   —   %d career win%s" % [
+			int(summary.horse_count), "" if int(summary.horse_count) == 1 else "s",
+			String(summary.lead_name) if String(summary.lead_name) != "" else "—",
+			int(summary.total_wins), "" if int(summary.total_wins) == 1 else "s",
+		]
+		summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		col.add_child(summary_label)
+
+		var continue_btn := Button.new()
+		continue_btn.text = "Continue"
+		continue_btn.theme_type_variation = "PrimaryButton"
+		continue_btn.pressed.connect(_on_slot_continue_pressed.bind(slot))
+		button_row.add_child(continue_btn)
+		UITheme.add_button_juice(continue_btn)
+
+		var delete_btn := Button.new()
+		delete_btn.text = "Delete"
+		delete_btn.theme_type_variation = "QuietButton"
+		delete_btn.pressed.connect(_on_slot_delete_requested.bind(slot))
+		button_row.add_child(delete_btn)
+		UITheme.add_button_juice(delete_btn)
+
+	col.add_child(button_row)
+	return card
+
+func _on_slot_new_pressed(slot: int) -> void:
+	CareerStable.start_new_career(slot)
+	_build()
+
+func _on_slot_continue_pressed(slot: int) -> void:
+	CareerStable.load_slot(slot)
+	CareerStable.process_daily_trainer_upkeep()
+	_refresh_balance_label()
+	_build()
+
+## Destructive — real confirmation dialog before actually deleting a slot's
+## save file (CareerStable.delete_slot), same "confirm before anything
+## irreversible" pattern this project's own tooling guidance calls for.
+func _on_slot_delete_requested(slot: int) -> void:
+	var dialog := ConfirmationDialog.new()
+	dialog.dialog_text = "Delete Career %d? This can't be undone." % (slot + 1)
+	add_child(dialog)
+	dialog.confirmed.connect(func():
+		CareerStable.delete_slot(slot)
+		dialog.queue_free()
+		_build()
+	)
+	dialog.canceled.connect(dialog.queue_free)
+	dialog.popup_centered()
+
+## Back to the slot picker without leaving CareerHub entirely — reachable
+## from the main hub footer (see _build_hub).
+func _on_switch_career_pressed() -> void:
+	CareerStable.current_slot = -1
+	_build()
+
 ## ---- Starter pick ----
 
 func _build_starter_pick() -> void:
@@ -148,7 +255,7 @@ func _build_starter_card(index: int) -> Control:
 	col.add_child(name_label)
 
 	var specialty_label := Label.new()
-	specialty_label.text = "Specialty: %s (starts at Level 2)" % CareerStable.ATTRIBUTE_LABELS[starter.specialty]
+	specialty_label.text = "Specialty: %s (starts at Level 2)" % CareerStable.CATEGORY_LABELS[starter.specialty]
 	col.add_child(specialty_label)
 
 	var flavor_label := Label.new()
@@ -186,12 +293,23 @@ func _build_hub() -> void:
 		_content.add_child(buy_btn)
 		UITheme.add_button_juice(buy_btn)
 
+	var footer_row := HFlowContainer.new()
+	footer_row.add_theme_constant_override("separation", 10)
+	_content.add_child(footer_row)
+
 	var stats_btn := Button.new()
 	stats_btn.text = "Career Achievements"
 	stats_btn.theme_type_variation = "GhostButton"
 	stats_btn.pressed.connect(_show_achievements_dialog)
-	_content.add_child(stats_btn)
+	footer_row.add_child(stats_btn)
 	UITheme.add_button_juice(stats_btn)
+
+	var switch_btn := Button.new()
+	switch_btn.text = "Switch Career"
+	switch_btn.theme_type_variation = "GhostButton"
+	switch_btn.pressed.connect(_on_switch_career_pressed)
+	footer_row.add_child(switch_btn)
+	UITheme.add_button_juice(switch_btn)
 
 func _build_horse_card(id: int) -> Control:
 	var horse: Dictionary = CareerStable.get_owned_horse(id)
@@ -221,50 +339,51 @@ func _build_horse_card(id: int) -> Control:
 	class_label.text = "Class: %s" % horse_class.name
 	col.add_child(class_label)
 
+	# 3 category rollups shown compactly (each summed from several trainable
+	# sub-attributes — see CareerStable.get_category_level) rather than all
+	# ~25 sub-attribute lines inline, which would make this card enormous;
+	# the "Train"/"Focus" buttons below open the full grouped list instead.
 	var cap: int = CareerStable.get_potential_cap(id)
-	for attr_id in CareerStable.ATTRIBUTE_IDS:
-		var level: int = CareerStable.get_attribute_level(id, attr_id)
+	for category_id in CareerStable.CATEGORY_IDS:
+		var level: int = CareerStable.get_category_level(id, category_id)
 		var pips: String = ""
 		for p in range(cap):
 			pips += "●" if p < level else "○"
 		var attr_label := Label.new()
-		attr_label.text = "%s: %s (Lv %d/%d)" % [CareerStable.ATTRIBUTE_LABELS[attr_id], pips, level, cap]
+		attr_label.text = "%s: %s (Lv %d/%d)" % [CareerStable.CATEGORY_LABELS[category_id], pips, level, cap]
 		col.add_child(attr_label)
 
 	var trainer_tier: Dictionary = CareerStable.get_trainer_tier(String(horse.get("trainer_tier_id", "none")))
+	var focus_id: String = String(horse.get("training_focus", CareerStable.SUB_ATTRIBUTE_IDS[0]))
 	var trainer_row := HFlowContainer.new() # wraps to a new line instead of overflowing the panel when both buttons' text doesn't fit one row
 	trainer_row.add_theme_constant_override("separation", 10)
 	col.add_child(trainer_row)
 
 	var trainer_btn := Button.new()
-	trainer_btn.text = "Trainer: %s (tap to change)" % trainer_tier.label
+	trainer_btn.text = "Trainer: %s" % trainer_tier.label
 	trainer_btn.theme_type_variation = "GhostButton"
-	trainer_btn.pressed.connect(_on_cycle_trainer.bind(id))
+	trainer_btn.pressed.connect(_on_open_trainer_selector.bind(id))
 	trainer_row.add_child(trainer_btn)
 	UITheme.add_button_juice(trainer_btn)
 
 	var focus_btn := Button.new()
-	focus_btn.text = "Focus: %s (tap to change)" % CareerStable.ATTRIBUTE_LABELS[String(horse.get("training_focus", CareerStable.ATTRIBUTE_IDS[0]))]
+	focus_btn.text = "Focus: %s" % String(CareerStable.SUB_ATTRIBUTE_LABELS.get(focus_id, focus_id))
 	focus_btn.theme_type_variation = "GhostButton"
-	focus_btn.pressed.connect(_on_cycle_focus.bind(id))
+	focus_btn.pressed.connect(_on_open_focus_selector.bind(id))
 	trainer_row.add_child(focus_btn)
 	UITheme.add_button_juice(focus_btn)
 
 	var can_train: bool = CareerStable.can_train_today(id)
-	var train_row := HFlowContainer.new() # wraps to a new line instead of overflowing the panel when all 3 buttons' text doesn't fit one row
-	train_row.add_theme_constant_override("separation", 8)
-	col.add_child(train_row)
-	for attr_id in CareerStable.ATTRIBUTE_IDS:
-		var btn := Button.new()
-		btn.text = "Train %s (%s)" % [CareerStable.ATTRIBUTE_LABELS[attr_id], OddsTable.format_money(CareerStable.SELF_TRAIN_ITEM_COST)]
-		btn.disabled = not can_train or not Bankroll.can_afford(CareerStable.SELF_TRAIN_ITEM_COST)
-		btn.pressed.connect(_on_self_train_pressed.bind(id, attr_id))
-		train_row.add_child(btn)
-		UITheme.add_button_juice(btn)
+	var train_btn := Button.new()
+	train_btn.text = "Train an Attribute (%s)" % OddsTable.format_money(CareerStable.SELF_TRAIN_ITEM_COST)
+	train_btn.disabled = not can_train or not Bankroll.can_afford(CareerStable.SELF_TRAIN_ITEM_COST)
+	train_btn.pressed.connect(_on_open_train_selector.bind(id))
+	col.add_child(train_btn)
+	UITheme.add_button_juice(train_btn)
 
 	if not can_train:
 		var trained_note := Label.new()
-		trained_note.text = "Already trained today — check back tomorrow."
+		trained_note.text = "Already trained %d time(s) today — check back tomorrow." % CareerStable.DAILY_TRAINING_ACTIONS
 		col.add_child(trained_note)
 
 	var race_btn := Button.new()
@@ -276,25 +395,111 @@ func _build_horse_card(id: int) -> Control:
 
 	return card
 
-func _on_cycle_trainer(id: int) -> void:
-	var current: String = String(CareerStable.get_owned_horse(id).get("trainer_tier_id", "none"))
-	var ids: Array = []
-	for tier in CareerStable.TRAINER_TIERS:
-		ids.append(tier.id)
-	var idx: int = (ids.find(current) + 1) % ids.size()
-	CareerStable.hire_trainer(id, ids[idx])
-	_build()
+## ---- Trainer / focus / train selectors (popup lists, not OptionButton) ----
 
-func _on_cycle_focus(id: int) -> void:
-	var current: String = String(CareerStable.get_owned_horse(id).get("training_focus", CareerStable.ATTRIBUTE_IDS[0]))
-	var idx: int = (CareerStable.ATTRIBUTE_IDS.find(current) + 1) % CareerStable.ATTRIBUTE_IDS.size()
-	CareerStable.set_training_focus(id, CareerStable.ATTRIBUTE_IDS[idx])
-	_build()
+func _on_open_trainer_selector(id: int) -> void:
+	var options: Array = []
+	for tier in CareerStable.TRAINER_TIERS:
+		var label: String = String(tier.label)
+		if int(tier.daily_cost) > 0:
+			label = "%s — %s/day" % [tier.label, OddsTable.format_money(int(tier.daily_cost))]
+		options.append({"id": tier.id, "label": label})
+	_open_selector("Choose a Trainer", [{"heading": "", "options": options}], func(picked_id: String):
+		CareerStable.hire_trainer(id, picked_id)
+		_build()
+	)
+
+func _on_open_focus_selector(id: int) -> void:
+	_open_selector("Set Training Focus", _sub_attribute_groups(), func(picked_id: String):
+		CareerStable.set_training_focus(id, picked_id)
+		_build()
+	)
+
+func _on_open_train_selector(id: int) -> void:
+	var title: String = "Train Which Attribute? (%s)" % OddsTable.format_money(CareerStable.SELF_TRAIN_ITEM_COST)
+	_open_selector(title, _sub_attribute_groups(), func(picked_id: String):
+		_on_self_train_pressed(id, picked_id)
+	)
 
 func _on_self_train_pressed(id: int, attribute_id: String) -> void:
 	CareerStable.self_train(id, attribute_id)
 	_refresh_balance_label()
 	_build()
+
+## All 25 sub-attributes, grouped by their parent category — shared by the
+## focus and train selectors so both list the exact same options the exact
+## same way.
+func _sub_attribute_groups() -> Array:
+	var groups: Array = []
+	for category_id in CareerStable.CATEGORY_IDS:
+		var options: Array = []
+		for sub_id in CareerStable.SUB_ATTRIBUTE_IDS:
+			if String(CareerStable.SUB_ATTRIBUTE_CATEGORY.get(sub_id, "")) == category_id:
+				options.append({"id": sub_id, "label": String(CareerStable.SUB_ATTRIBUTE_LABELS[sub_id])})
+		groups.append({"heading": String(CareerStable.CATEGORY_LABELS[category_id]), "options": options})
+	return groups
+
+## Generic gamepad-friendly selection popup — a plain scrollable list of
+## normal focusable Buttons in a Window (same "add_child + popup_centered"
+## shape _show_achievements_dialog's AcceptDialog already uses, since
+## AcceptDialog is itself a Window subclass), never an OptionButton — this
+## project has documented OptionButton-popup-vs-gamepad bugs, and plain
+## Buttons in a VBox get normal focus navigation for free. `groups` is
+## [{"heading": String, "options": [{"id": String, "label": String}]}];
+## `on_pick` is called with the chosen option's id once the player picks one.
+func _open_selector(title: String, groups: Array, on_pick: Callable) -> void:
+	var popup := Window.new()
+	popup.title = title
+	popup.size = Vector2i(440, 620)
+	popup.unresizable = true
+	add_child(popup)
+	popup.close_requested.connect(popup.queue_free)
+
+	var panel: PanelContainer = UITheme.make_glass_panel_container()
+	panel.anchor_right = 1.0
+	panel.anchor_bottom = 1.0
+	popup.add_child(panel)
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_%s" % side, 16)
+	panel.add_child(margin)
+
+	var scroll := ScrollContainer.new()
+	margin.add_child(scroll)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(col)
+
+	var first_btn: Button = null
+	for group in groups:
+		if String(group.get("heading", "")) != "":
+			var heading := Label.new()
+			heading.theme_type_variation = "EyebrowLabel"
+			heading.text = String(group.heading)
+			col.add_child(heading)
+		for opt in group.options:
+			var btn := Button.new()
+			btn.text = String(opt.label)
+			btn.pressed.connect(func():
+				popup.queue_free()
+				on_pick.call(String(opt.id))
+			)
+			col.add_child(btn)
+			UITheme.add_button_juice(btn)
+			if first_btn == null:
+				first_btn = btn
+
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.theme_type_variation = "QuietButton"
+	cancel_btn.pressed.connect(popup.queue_free)
+	col.add_child(cancel_btn)
+
+	popup.popup_centered()
+	if first_btn != null:
+		first_btn.grab_focus.call_deferred()
 
 ## ---- Marketplace (buying horse #2+) ----
 

@@ -11,7 +11,7 @@ extends Node
 ## trainer tiers) is meant to grow later without a data-format change, not a
 ## final scope.
 ##
-## Its own save file / autoload, separate from Career.gd (wild-roster
+## Its own save file(s) / autoload, separate from Career.gd (wild-roster
 ## win/loss stats + achievements) and Bankroll.gd (spendable balance) — this
 ## only tracks WHICH horses you own and how trained they are; actual money
 ## still flows through the one shared Bankroll.
@@ -20,19 +20,129 @@ signal horse_purchased(stable_horse_id: int)
 signal horse_trained(stable_horse_id: int, attribute_id: String, points_gained: int)
 signal race_purse_paid(stable_horse_id: int, amount: int)
 
-const SAVE_FILENAME: String = "career_stable.save"
-var SAVE_PATH: String
+## Multiple independent career slots — AJ: every starter pick/stable he'd
+## ever tried was piling up in ONE shared save, reading as "all just
+## commingled in one cluster" with no way to separate a fresh attempt from an
+## old one. Each slot is its own save file with its own owned_horses/
+## next_id/has_picked_starter; CareerHub gates on current_slot == -1 to show
+## a slot-select screen before anything else. Slot files use the OLD
+## unslotted SAVE_FILENAME's naming scheme with a slot number suffix, not the
+## original bare filename — the original single career_stable.save is left
+## untouched on disk (not auto-migrated into slot 0): AJ's complaint was that
+## everything was already tangled together, so silently moving that same
+## tangle into "slot 1" would just recreate the exact problem this exists to
+## fix. That old file is simply orphaned/unused now, not deleted.
+const SLOT_COUNT: int = 4
+var current_slot: int = -1
 
-const ATTRIBUTE_IDS: Array[String] = ["acceleration", "stamina", "closing_kick"]
-const ATTRIBUTE_LABELS: Dictionary = {
+func slot_save_path(slot: int) -> String:
+	return SavePaths.resolve("career_stable_slot%d.save" % slot)
+
+## Lightweight peek at a slot's summary (horse count / lead horse / total
+## wins) WITHOUT touching the live owned_horses/current_slot state — used by
+## the slot-picker screen to show what's in each slot before committing to
+## loading it.
+func peek_slot_summary(slot: int) -> Dictionary:
+	var path: String = slot_save_path(slot)
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var data: Variant = JSON.parse_string(file.get_as_text())
+	if typeof(data) != TYPE_DICTIONARY:
+		return {}
+	var owned: Dictionary = data.get("owned_horses", {})
+	var lead_name: String = ""
+	var total_wins: int = 0
+	for key in owned.keys():
+		var h: Dictionary = owned[key]
+		total_wins += int(h.get("career_wins", 0))
+		if lead_name == "":
+			lead_name = String(h.get("horse_name", ""))
+	return {"horse_count": owned.size(), "lead_name": lead_name, "total_wins": total_wins}
+
+func load_slot(slot: int) -> void:
+	current_slot = slot
+	_load()
+
+## Starts a brand-new career in this slot — resets in-memory state; nothing
+## is written to disk until the first real mutation (starter pick, etc.),
+## same as a fresh single-save game always worked before slots existed.
+func start_new_career(slot: int) -> void:
+	current_slot = slot
+	owned_horses = {}
+	_next_id = ID_START
+	_has_picked_starter = false
+
+## Permanently deletes a slot's save file — destructive, only ever called
+## from a confirmation dialog (see CareerHub._build_slot_picker).
+func delete_slot(slot: int) -> void:
+	var path: String = slot_save_path(slot)
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+## Kept as 3 broad categories (these are the only 3 RaceSim actually reads —
+## see build_attribute_overrides) but each is now trained through a set of
+## more specific SUB_ATTRIBUTE_IDS instead of directly — AJ wanted "more than
+## three stat lines... maybe twenty five" instead of one flat number per
+## category. A sub-attribute's points count toward its category's total
+## (get_category_points sums them) using the exact same POINTS_PER_LEVEL/cap
+## math as before, so RaceSim's own tuned per-level bonuses are completely
+## unaffected — this only changes how a category's points get EARNED (spread
+## across several specific drills instead of one), never what they're worth.
+const CATEGORY_IDS: Array[String] = ["acceleration", "stamina", "closing_kick"]
+const CATEGORY_LABELS: Dictionary = {
 	"acceleration": "Acceleration",
 	"stamina": "Stamina",
 	"closing_kick": "Closing Kick",
 }
-## A horse needs roughly 3 level-ups spread across these 3 stats (not 3 in
-## one stat) before it's genuinely competitive against a fresh-rolled wild
-## field — see RaceSim's per-level bonus consts for why: each individual
-## level is a real but modest edge, not a power spike.
+## Which sub-attribute a starter horse's specialty bonus (STARTER_SPECIALTY_
+## POINTS) lands on, and what a purchased horse's training_focus defaults
+## toward when its origin doesn't specify one — one representative "primary"
+## drill per category so a starting horse still opens at a legible Level 2 in
+## its specialty category (40 points in ONE sub-attribute = the category's
+## own sum reaches 40 = level 2, identical to the old single-attribute math).
+const CATEGORY_PRIMARY_SUB: Dictionary = {
+	"acceleration": "early_speed",
+	"stamina": "endurance",
+	"closing_kick": "late_speed",
+}
+
+const SUB_ATTRIBUTE_IDS: Array[String] = [
+	# Acceleration (8)
+	"gate_break", "early_speed", "burst_power", "reflexes",
+	"track_grip", "sprint_mechanics", "warmup_focus", "pace_sense",
+	# Stamina (9)
+	"endurance", "lung_capacity", "heart_recovery", "distance_aptitude",
+	"mental_toughness", "conditioning", "fitness_base", "pacing_discipline", "fatigue_resistance",
+	# Closing Kick (8)
+	"late_speed", "determination", "competitive_drive", "traffic_sense",
+	"whip_response", "final_furlong_push", "rail_awareness", "closing_instinct",
+]
+const SUB_ATTRIBUTE_LABELS: Dictionary = {
+	"gate_break": "Gate Break", "early_speed": "Early Speed", "burst_power": "Burst Power", "reflexes": "Reflexes",
+	"track_grip": "Track Grip", "sprint_mechanics": "Sprint Mechanics", "warmup_focus": "Warm-Up Focus", "pace_sense": "Pace Sense",
+	"endurance": "Endurance", "lung_capacity": "Lung Capacity", "heart_recovery": "Heart Recovery", "distance_aptitude": "Distance Aptitude",
+	"mental_toughness": "Mental Toughness", "conditioning": "Conditioning", "fitness_base": "Fitness Base",
+	"pacing_discipline": "Pacing Discipline", "fatigue_resistance": "Fatigue Resistance",
+	"late_speed": "Late Speed", "determination": "Determination", "competitive_drive": "Competitive Drive", "traffic_sense": "Traffic Sense",
+	"whip_response": "Whip Response", "final_furlong_push": "Final Furlong Push", "rail_awareness": "Rail Awareness", "closing_instinct": "Closing Instinct",
+}
+const SUB_ATTRIBUTE_CATEGORY: Dictionary = {
+	"gate_break": "acceleration", "early_speed": "acceleration", "burst_power": "acceleration", "reflexes": "acceleration",
+	"track_grip": "acceleration", "sprint_mechanics": "acceleration", "warmup_focus": "acceleration", "pace_sense": "acceleration",
+	"endurance": "stamina", "lung_capacity": "stamina", "heart_recovery": "stamina", "distance_aptitude": "stamina",
+	"mental_toughness": "stamina", "conditioning": "stamina", "fitness_base": "stamina",
+	"pacing_discipline": "stamina", "fatigue_resistance": "stamina",
+	"late_speed": "closing_kick", "determination": "closing_kick", "competitive_drive": "closing_kick", "traffic_sense": "closing_kick",
+	"whip_response": "closing_kick", "final_furlong_push": "closing_kick", "rail_awareness": "closing_kick", "closing_instinct": "closing_kick",
+}
+
+## A horse needs roughly 3 level-ups spread across the 3 CATEGORIES (not 3 in
+## one) before it's genuinely competitive against a fresh-rolled wild field —
+## see RaceSim's per-level bonus consts for why: each individual level is a
+## real but modest edge, not a power spike.
 const POINTS_PER_LEVEL: int = 20
 const MAX_LEVEL: int = 5
 
@@ -41,11 +151,15 @@ const MAX_LEVEL: int = 5
 ## deliberately NOT his actual name for obvious legal reasons. Close enough
 ## to land the joke, different enough to be clearly its own fictional
 ## character, same as this game already does for its wild-roster horse names.
+## daily_cost ladder: AJ wanted a flatter, cheaper spread (100/200/300) than
+## the original (100/300/800) — noted the earlier name-only change "didn't
+## look like it changed" anything price-wise, which it hadn't; this is the
+## actual rate change.
 const TRAINER_TIERS: Array[Dictionary] = [
 	{"id": "none", "label": "No Trainer (self-train only)", "daily_cost": 0, "gain": 0},
 	{"id": "local", "label": "Local Trainer", "daily_cost": 100, "gain": 4},
-	{"id": "regional", "label": "Regional Trainer", "daily_cost": 300, "gain": 7},
-	{"id": "elite", "label": "Bob Baffleton (Elite)", "daily_cost": 800, "gain": 11},
+	{"id": "regional", "label": "Regional Trainer", "daily_cost": 200, "gain": 7},
+	{"id": "elite", "label": "Bob Baffleton (Elite)", "daily_cost": 300, "gain": 11},
 ]
 ## Self-training is the cheaper-per-point path IF you show up every day and
 ## buy the drill yourself; hiring a trainer costs more per point but needs
@@ -54,6 +168,13 @@ const TRAINER_TIERS: Array[Dictionary] = [
 const SELF_TRAIN_ITEM_COST: int = 400
 const SELF_TRAIN_GAIN_MIN: int = 8
 const SELF_TRAIN_GAIN_MAX: int = 16
+## AJ: "you can train... maybe one or two per day" — was a flat one-action-
+## per-day gate; now a horse can take up to this many training ACTIONS
+## (self-train and/or the hired trainer's own automatic session, whichever
+## combination happens first) in the same day, matching a 25-sub-attribute
+## spread taking meaningfully longer to flesh out than the old 3-attribute
+## version did.
+const DAILY_TRAINING_ACTIONS: int = 2
 
 ## Owned-horse ids start well past HorseRoster's 60 wild-roster ids (0-59)
 ## so a bought horse never collides with a wild horse's coat-color lookup
@@ -68,7 +189,9 @@ const ID_START: int = 1000
 ## earned money racing). STARTER_SPECIALTY_POINTS (40 = level 2 of up to the
 ## "starter" origin's potential_cap of 3, see HorseOrigins.ORIGINS) gives an
 ## immediately legible identity to each choice without pre-deciding the
-## whole game for the player — there's still real training ahead.
+## whole game for the player — there's still real training ahead. specialty
+## is a CATEGORY id (see CATEGORY_PRIMARY_SUB for which specific sub-
+## attribute actually receives the bonus points).
 const STARTER_SPECIALTY_POINTS: int = 40
 const STARTER_HORSES: Array[Dictionary] = [
 	{"horse_name": "Steady Gallop", "specialty": "stamina", "flavor": "Built to go the distance — never fades late."},
@@ -115,11 +238,14 @@ const PURCHASABLE_NAME_POOL: Array[String] = [
 ]
 
 ## String(id) -> Dictionary: horse_name, jockey_name, origin_id,
-## attributes ({attribute_id: {"points": int}}), trainer_tier_id,
-## training_focus, last_trained_date ("" if never), career_wins,
-## career_races, purchase_price. Level is derived from points (see
-## get_attribute_level), never stored directly, so POINTS_PER_LEVEL can be
-## retuned later without a save migration.
+## attributes ({sub_attribute_id: {"points": int}}, one entry per
+## SUB_ATTRIBUTE_IDS), trainer_tier_id, training_focus (a sub-attribute id),
+## last_trained_date ("" if never), trainings_today (int, resets whenever
+## last_trained_date rolls to a new day), career_wins, career_races,
+## purchase_price. Category levels are derived from summed sub-attribute
+## points (see get_category_level), never stored directly, so POINTS_PER_
+## LEVEL/the sub-attribute list can both keep growing without a save
+## migration.
 var owned_horses: Dictionary = {}
 var _next_id: int = ID_START
 
@@ -128,9 +254,11 @@ var _next_id: int = ID_START
 ## overwrites the player's real save file on disk.
 var autosave_enabled: bool = true
 
+## No eager _load() here anymore — current_slot starts unset (-1) until
+## CareerHub's slot-picker screen actually chooses or starts one (see
+## load_slot/start_new_career above).
 func _ready() -> void:
-	SAVE_PATH = SavePaths.resolve(SAVE_FILENAME)
-	_load()
+	pass
 
 func has_picked_starter() -> bool:
 	return _has_picked_starter
@@ -142,8 +270,10 @@ func pick_starter_horse(starter_index: int) -> int:
 		return -1
 	var starter: Dictionary = STARTER_HORSES[starter_index]
 	var attributes: Dictionary = {}
-	for attr in ATTRIBUTE_IDS:
-		attributes[attr] = {"points": STARTER_SPECIALTY_POINTS if attr == starter.specialty else 0}
+	for sub_id in SUB_ATTRIBUTE_IDS:
+		attributes[sub_id] = {"points": 0}
+	var primary_sub: String = String(CATEGORY_PRIMARY_SUB.get(starter.specialty, SUB_ATTRIBUTE_IDS[0]))
+	attributes[primary_sub] = {"points": STARTER_SPECIALTY_POINTS}
 	var id: int = _next_id
 	_next_id += 1
 	owned_horses[str(id)] = {
@@ -152,8 +282,9 @@ func pick_starter_horse(starter_index: int) -> int:
 		"origin_id": "starter",
 		"attributes": attributes,
 		"trainer_tier_id": "none",
-		"training_focus": starter.specialty,
+		"training_focus": primary_sub,
 		"last_trained_date": "",
+		"trainings_today": 0,
 		"career_wins": 0,
 		"career_races": 0,
 		"purchase_price": 0,
@@ -172,16 +303,17 @@ func purchase_horse(origin_id: String, horse_name: String) -> int:
 	var id: int = _next_id
 	_next_id += 1
 	var attributes: Dictionary = {}
-	for attr in ATTRIBUTE_IDS:
-		attributes[attr] = {"points": 0}
+	for sub_id in SUB_ATTRIBUTE_IDS:
+		attributes[sub_id] = {"points": 0}
 	owned_horses[str(id)] = {
 		"horse_name": horse_name,
 		"jockey_name": HorseRoster.JOCKEY_NAMES[randi() % HorseRoster.JOCKEY_NAMES.size()],
 		"origin_id": origin.id,
 		"attributes": attributes,
 		"trainer_tier_id": "none",
-		"training_focus": ATTRIBUTE_IDS[0],
+		"training_focus": SUB_ATTRIBUTE_IDS[0],
 		"last_trained_date": "",
+		"trainings_today": 0,
 		"career_wins": 0,
 		"career_races": 0,
 		"purchase_price": price,
@@ -203,9 +335,18 @@ func get_attribute_points(stable_horse_id: int, attribute_id: String) -> int:
 	var horse: Dictionary = get_owned_horse(stable_horse_id)
 	return int(horse.get("attributes", {}).get(attribute_id, {}).get("points", 0))
 
-func get_attribute_level(stable_horse_id: int, attribute_id: String) -> int:
+## Sum of every sub-attribute's points under one category — the category's
+## own effective "points" for level/cap purposes (see get_category_level).
+func get_category_points(stable_horse_id: int, category_id: String) -> int:
+	var total: int = 0
+	for sub_id in SUB_ATTRIBUTE_IDS:
+		if String(SUB_ATTRIBUTE_CATEGORY.get(sub_id, "")) == category_id:
+			total += get_attribute_points(stable_horse_id, sub_id)
+	return total
+
+func get_category_level(stable_horse_id: int, category_id: String) -> int:
 	var cap: int = get_potential_cap(stable_horse_id)
-	return min(get_attribute_points(stable_horse_id, attribute_id) / POINTS_PER_LEVEL, cap)
+	return min(get_category_points(stable_horse_id, category_id) / POINTS_PER_LEVEL, cap)
 
 func get_potential_cap(stable_horse_id: int) -> int:
 	var horse: Dictionary = get_owned_horse(stable_horse_id)
@@ -216,20 +357,26 @@ func _today() -> String:
 
 func can_train_today(stable_horse_id: int) -> bool:
 	var horse: Dictionary = get_owned_horse(stable_horse_id)
-	return not horse.is_empty() and String(horse.get("last_trained_date", "")) != _today()
+	if horse.is_empty():
+		return false
+	if String(horse.get("last_trained_date", "")) != _today():
+		return true
+	return int(horse.get("trainings_today", 0)) < DAILY_TRAINING_ACTIONS
 
 ## Player-directed self-training — costs SELF_TRAIN_ITEM_COST regardless of
 ## outcome (a real drill session bought for the horse), rng gain, available
 ## whether or not a trainer is hired (skipping the trainer's automatic
 ## session that day in favor of self-training instead is a legitimate,
-## if slightly wasteful, choice — see process_daily_trainer_upkeep).
-func self_train(stable_horse_id: int, attribute_id: String) -> bool:
-	if not can_train_today(stable_horse_id) or not ATTRIBUTE_IDS.has(attribute_id):
+## if slightly wasteful, choice — see process_daily_trainer_upkeep). Up to
+## DAILY_TRAINING_ACTIONS total actions/day, shared with the hired trainer's
+## own automatic session (see can_train_today).
+func self_train(stable_horse_id: int, sub_attribute_id: String) -> bool:
+	if not can_train_today(stable_horse_id) or not SUB_ATTRIBUTE_IDS.has(sub_attribute_id):
 		return false
 	if not Bankroll.can_afford(SELF_TRAIN_ITEM_COST):
 		return false
 	Bankroll.place_bet(SELF_TRAIN_ITEM_COST)
-	_apply_training(stable_horse_id, attribute_id, randi_range(SELF_TRAIN_GAIN_MIN, SELF_TRAIN_GAIN_MAX))
+	_apply_training(stable_horse_id, sub_attribute_id, randi_range(SELF_TRAIN_GAIN_MIN, SELF_TRAIN_GAIN_MAX))
 	return true
 
 func hire_trainer(stable_horse_id: int, trainer_tier_id: String) -> void:
@@ -240,11 +387,11 @@ func hire_trainer(stable_horse_id: int, trainer_tier_id: String) -> void:
 	owned_horses[str(stable_horse_id)] = horse
 	_save()
 
-func set_training_focus(stable_horse_id: int, attribute_id: String) -> void:
+func set_training_focus(stable_horse_id: int, sub_attribute_id: String) -> void:
 	var horse: Dictionary = get_owned_horse(stable_horse_id)
-	if horse.is_empty() or not ATTRIBUTE_IDS.has(attribute_id):
+	if horse.is_empty() or not SUB_ATTRIBUTE_IDS.has(sub_attribute_id):
 		return
-	horse.training_focus = attribute_id
+	horse.training_focus = sub_attribute_id
 	owned_horses[str(stable_horse_id)] = horse
 	_save()
 
@@ -255,12 +402,25 @@ func set_training_focus(stable_horse_id: int, attribute_id: String) -> void:
 ## manually. Silently skips (does NOT queue up/backdate) a horse whose
 ## trainer couldn't be paid that day — matches a real trainer just not
 ## showing up if the bill isn't covered, no debt mechanic.
+## Guarded by its OWN trainer_last_upkeep_date, separate from the self-train
+## trainings_today counter this shares via _apply_training below — this
+## function gets called once per session load (CareerHub's slot-continue),
+## and needs to stay a no-op on a second same-day call in the same session
+## rather than double-charging/double-training. A hired trainer's session
+## still counts as ONE of the day's shared DAILY_TRAINING_ACTIONS (see
+## can_train_today) — hiring a trainer and self-training both eat from the
+## same daily budget, same "pick one or the other, or both if the budget
+## allows" relationship this project had before DAILY_TRAINING_ACTIONS was 1.
 func process_daily_trainer_upkeep() -> void:
 	for key in owned_horses.keys():
 		var id: int = int(key)
 		var horse: Dictionary = owned_horses[key]
 		var tier_id: String = String(horse.get("trainer_tier_id", "none"))
-		if tier_id == "none" or not can_train_today(id):
+		if tier_id == "none":
+			continue
+		if String(horse.get("trainer_last_upkeep_date", "")) == _today():
+			continue
+		if not can_train_today(id):
 			continue
 		var tier: Dictionary = get_trainer_tier(tier_id)
 		var cost: int = int(tier.get("daily_cost", 0))
@@ -268,22 +428,45 @@ func process_daily_trainer_upkeep() -> void:
 			continue
 		if cost > 0:
 			Bankroll.place_bet(cost)
-		_apply_training(id, String(horse.get("training_focus", ATTRIBUTE_IDS[0])), int(tier.get("gain", 0)))
+		_apply_training(id, String(horse.get("training_focus", SUB_ATTRIBUTE_IDS[0])), int(tier.get("gain", 0)))
+		var updated_horse: Dictionary = get_owned_horse(id)
+		updated_horse.trainer_last_upkeep_date = _today()
+		owned_horses[str(id)] = updated_horse
+		_save()
 
-func _apply_training(stable_horse_id: int, attribute_id: String, gain: int) -> void:
+## Clamps the ACTUAL applied gain so the sub-attribute's own category never
+## sums past its potential cap (cap * POINTS_PER_LEVEL) — capping each
+## sub-attribute individually at that same threshold would be wrong now that
+## a category sums ~8 of them (a fully-capped category would then read as
+## 8x over cap). Still advances trainings_today/last_trained_date even when
+## the applied gain clamps to 0 (a training session that didn't help still
+## used up the day's action and the trainer's fee, same as before).
+func _apply_training(stable_horse_id: int, sub_attribute_id: String, gain: int) -> void:
 	var horse: Dictionary = get_owned_horse(stable_horse_id)
 	if horse.is_empty():
 		return
-	var attributes: Dictionary = horse.get("attributes", {})
-	var attr: Dictionary = attributes.get(attribute_id, {"points": 0})
+	var category_id: String = String(SUB_ATTRIBUTE_CATEGORY.get(sub_attribute_id, ""))
 	var cap_points: int = get_potential_cap(stable_horse_id) * POINTS_PER_LEVEL
-	attr.points = min(int(attr.get("points", 0)) + gain, cap_points)
-	attributes[attribute_id] = attr
+	var category_points_now: int = get_category_points(stable_horse_id, category_id)
+	var allowed_gain: int = max(cap_points - category_points_now, 0)
+	var applied_gain: int = min(gain, allowed_gain)
+
+	var attributes: Dictionary = horse.get("attributes", {})
+	var attr: Dictionary = attributes.get(sub_attribute_id, {"points": 0})
+	attr.points = int(attr.get("points", 0)) + applied_gain
+	attributes[sub_attribute_id] = attr
 	horse.attributes = attributes
-	horse.last_trained_date = _today()
+
+	var today: String = _today()
+	if String(horse.get("last_trained_date", "")) != today:
+		horse.trainings_today = 1
+	else:
+		horse.trainings_today = int(horse.get("trainings_today", 0)) + 1
+	horse.last_trained_date = today
+
 	owned_horses[str(stable_horse_id)] = horse
 	_save()
-	horse_trained.emit(stable_horse_id, attribute_id, gain)
+	horse_trained.emit(stable_horse_id, sub_attribute_id, applied_gain)
 
 func get_trainer_tier(id: String) -> Dictionary:
 	for tier in TRAINER_TIERS:
@@ -294,13 +477,14 @@ func get_trainer_tier(id: String) -> Dictionary:
 ## Builds the attribute_overrides dict RaceSim.simulate expects, for a
 ## Career race where `field_index` in that race's field array is this owned
 ## horse (see RaceTrack3D/RaceSim.gd — Phase 2 wires an actual Career race
-## flow that calls this).
+## flow that calls this). Still only 3 flat category levels — RaceSim itself
+## has no idea sub-attributes exist at all.
 func build_attribute_overrides(stable_horse_id: int, field_index: int) -> Dictionary:
 	return {
 		field_index: {
-			"acceleration_level": get_attribute_level(stable_horse_id, "acceleration"),
-			"stamina_level": get_attribute_level(stable_horse_id, "stamina"),
-			"closing_kick_level": get_attribute_level(stable_horse_id, "closing_kick"),
+			"acceleration_level": get_category_level(stable_horse_id, "acceleration"),
+			"stamina_level": get_category_level(stable_horse_id, "stamina"),
+			"closing_kick_level": get_category_level(stable_horse_id, "closing_kick"),
 		},
 	}
 
@@ -332,9 +516,10 @@ func pay_purse(stable_horse_id: int, placement: int, class_purse: int) -> void:
 		race_purse_paid.emit(stable_horse_id, amount)
 
 func _load() -> void:
-	if not FileAccess.file_exists(SAVE_PATH):
+	var path: String = slot_save_path(current_slot)
+	if not FileAccess.file_exists(path):
 		return
-	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return
 	var data: Variant = JSON.parse_string(file.get_as_text())
@@ -345,9 +530,9 @@ func _load() -> void:
 	_has_picked_starter = bool(data.get("has_picked_starter", false))
 
 func _save() -> void:
-	if not autosave_enabled:
+	if not autosave_enabled or current_slot == -1:
 		return
-	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var file := FileAccess.open(slot_save_path(current_slot), FileAccess.WRITE)
 	if file == null:
 		return
 	file.store_string(JSON.stringify({
