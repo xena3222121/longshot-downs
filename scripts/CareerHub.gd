@@ -216,6 +216,11 @@ func _build_horse_card(id: int) -> Control:
 	record.text = "Record: %dW-%dR    Jockey: %s" % [int(horse.get("career_wins", 0)), int(horse.get("career_races", 0)), horse.jockey_name]
 	col.add_child(record)
 
+	var horse_class: Dictionary = CareerStable.get_horse_class(id)
+	var class_label := Label.new()
+	class_label.text = "Class: %s" % horse_class.name
+	col.add_child(class_label)
+
 	var cap: int = CareerStable.get_potential_cap(id)
 	for attr_id in CareerStable.ATTRIBUTE_IDS:
 		var level: int = CareerStable.get_attribute_level(id, attr_id)
@@ -263,7 +268,7 @@ func _build_horse_card(id: int) -> Control:
 		col.add_child(trained_note)
 
 	var race_btn := Button.new()
-	race_btn.text = "Enter a Race"
+	race_btn.text = "Enter a Race — %s purse" % OddsTable.format_money(horse_class.purse)
 	race_btn.theme_type_variation = "PrimaryButton"
 	race_btn.pressed.connect(_start_race.bind(id))
 	col.add_child(race_btn)
@@ -384,6 +389,12 @@ func _achievements_summary_text() -> String:
 ## ---- Racing ----
 
 func _start_race(stable_horse_id: int) -> void:
+	# Snapshot the class/purse now, before this race's own result can bump
+	# career_races — get_horse_class reads career_races live, so paying out
+	# whatever class the horse is IN AFTER this race (rather than the class it
+	# actually raced AT) would silently pay a Claiming-race purse at Allowance
+	# rates the one race a horse levels up on.
+	var race_class: Dictionary = CareerStable.get_horse_class(stable_horse_id)
 	var owned_horse: Horse = _make_horse_resource(stable_horse_id)
 	var roster: Array[Horse] = HorseRoster.generate()
 	roster.shuffle()
@@ -399,7 +410,7 @@ func _start_race(stable_horse_id: int) -> void:
 	var race_track := RaceTrack3D.new()
 	_view_root.add_child(race_track)
 	race_track.setup(field, result)
-	race_track.playback_finished.connect(_on_race_finished.bind(stable_horse_id, result))
+	race_track.playback_finished.connect(_on_race_finished.bind(stable_horse_id, race_class, result))
 	race_track.play_with_post_time()
 
 func _make_horse_resource(stable_horse_id: int) -> Horse:
@@ -410,14 +421,14 @@ func _make_horse_resource(stable_horse_id: int) -> Horse:
 	horse.jockey_name = String(data.get("jockey_name", ""))
 	return horse
 
-func _on_race_finished(stable_horse_id: int, result: RaceResult) -> void:
+func _on_race_finished(stable_horse_id: int, race_class: Dictionary, result: RaceResult) -> void:
 	var placement: int = result.finish_order.find(0) + 1
 	var purse_before: int = Bankroll.balance
-	CareerStable.pay_purse(stable_horse_id, placement, CareerStable.DEFAULT_RACE_PURSE)
+	CareerStable.pay_purse(stable_horse_id, placement, int(race_class.purse))
 	var earned: int = Bankroll.balance - purse_before
-	_show_race_result(placement, earned)
+	_show_race_result(placement, earned, String(race_class.name))
 
-func _show_race_result(placement: int, earned: int) -> void:
+func _show_race_result(placement: int, earned: int, class_name_text: String) -> void:
 	_clear_view()
 
 	var center := CenterContainer.new()
@@ -442,6 +453,11 @@ func _show_race_result(placement: int, earned: int) -> void:
 	heading.text = "Finished %s!" % place_text
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	col.add_child(heading)
+
+	var class_label := Label.new()
+	class_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	class_label.text = "%s race" % class_name_text
+	col.add_child(class_label)
 
 	var earned_label := Label.new()
 	earned_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

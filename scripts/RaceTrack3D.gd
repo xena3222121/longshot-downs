@@ -1230,6 +1230,7 @@ func _build_environment() -> void:
 	var outer_radius: float = _lane_radius(field.size() - 1) + RAIL_GAP
 	_build_trees(infield_radius)
 	_build_grandstand(infield_radius)
+	_build_grandstand_reflection_probe()
 	_build_perimeter_flags(outer_radius)
 	_build_skyline(outer_radius)
 	_build_spectators(infield_radius)
@@ -1588,6 +1589,24 @@ var GRANDSTAND_COLOR_LOWER: Color
 var GRANDSTAND_COLOR_UPPER: Color
 var GRANDSTAND_ROOF_COLOR: Color
 var GRANDSTAND_TRIM_COLOR: Color
+
+## A single UPDATE_ONCE ReflectionProbe centered on the grandstand — SSR
+## (env.ssr_enabled, see _build_lighting) only reflects whatever's already
+## on-screen, so the grandstand's own near-mirror tiers (GRANDSTAND_COLOR_
+## LOWER/UPPER, see below) still went flat whenever the sky/skyline that
+## should be glinting off them was out of frame. The grandstand and its roof
+## never move once built, so one bake at race start is enough — UPDATE_ALWAYS
+## would spend real per-frame cost reflecting a scene that's already static,
+## for no visible gain. Doesn't touch SSR/tonemap/glow or anything else
+## _build_lighting already tuned; it only adds a reflection source those
+## couldn't reach.
+func _build_grandstand_reflection_probe() -> void:
+	var probe := ReflectionProbe.new()
+	probe.update_mode = ReflectionProbe.UPDATE_ONCE
+	probe.size = Vector3(70.0, 26.0, 70.0)
+	probe.position = _sample_track(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS).position \
+		+ Vector3(0.0, GRANDSTAND_TIER_HEIGHT * GRANDSTAND_TIERS * 0.5, 0.0)
+	add_child(probe)
 
 func _build_grandstand(infield_radius: float) -> void:
 	if GRANDSTAND_CENTER_RADIUS + GRANDSTAND_TIER_DEPTH * GRANDSTAND_TIERS >= infield_radius:

@@ -72,11 +72,32 @@ const STARTER_HORSES: Array[Dictionary] = [
 ]
 var _has_picked_starter: bool = false
 
-## Flat purse for a Career race (Phase 2's simple single ladder rung) —
-## real-racing class-based purse scaling is a fine future refinement, not
-## needed for a first working loop. Split via PURSE_WIN/PLACE/SHOW_SHARE
-## below in pay_purse().
-const DEFAULT_RACE_PURSE: int = 20000
+## Per-horse race-class ladder, gated on THIS horse's own career_races (not
+## Career.gd's RACE_CLASSES, which gates a global purse-bonus MULTIPLIER off
+## total races run across every wild-field bet regardless of whose horse ran
+## — a career-mode horse making its stable debut shouldn't already be racing
+## for allowance money just because the player has bet on 40 unrelated wild
+## races). Same shape as Career.RACE_CLASSES on purpose (min_races gates,
+## cosmetic name, escalating reward) but a flat purse per rung rather than a
+## bonus multiplier, since a career race has no separate "base purse" to
+## apply a bonus on top of. Deliberately doesn't touch RaceSim/OddsTable — a
+## Grade 1 field is still drawn and paced exactly like a Maiden field, same
+## as Career.gd's own class ladder leaves race math alone.
+const STABLE_RACE_CLASSES: Array[Dictionary] = [
+	{"id": "maiden", "name": "Maiden Special Weight", "min_races": 0, "purse": 20000},
+	{"id": "claiming", "name": "Claiming", "min_races": 4, "purse": 32000},
+	{"id": "allowance", "name": "Allowance", "min_races": 10, "purse": 50000},
+	{"id": "stakes", "name": "Stakes", "min_races": 20, "purse": 85000},
+	{"id": "grade1", "name": "Grade 1 Stakes", "min_races": 35, "purse": 150000},
+]
+
+func get_horse_class(stable_horse_id: int) -> Dictionary:
+	var races: int = int(get_owned_horse(stable_horse_id).get("career_races", 0))
+	var current: Dictionary = STABLE_RACE_CLASSES[0]
+	for race_class in STABLE_RACE_CLASSES:
+		if races >= int(race_class.min_races):
+			current = race_class
+	return current
 
 ## No free-text input anywhere in this game (see docs/STEAM_DECK_REVIEW.md —
 ## zero LineEdit/TextEdit usage is a real, already-banked Deck-compatibility
