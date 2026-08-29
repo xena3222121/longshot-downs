@@ -975,11 +975,32 @@ func _apply_camera_chase_shot() -> void:
 ## version's _sample_track — same four-segment stadium shape, same
 ## continuity across all segment joins — just (x,y)->(x,0,z) and no
 ## analytical heading (facing is handled by look_at at the call site).
+##
+## AJ: "when you get to the top of the stretch it's so fucking short... make
+## the finish line way after where just the bend is, like a real race." Before
+## HOME_STRETCH_FRACTION existed, fraction 0 (where the finish line/gate are
+## both planted — see _make_finish_line's comment) was exactly the point the
+## final turn ends, i.e. zero straight track between "exiting the turn" and
+## "crossing the wire" — the two 140-unit straights were being spent entirely
+## as gate-runup + backstretch, none of it as an actual home stretch.
+## HOME_STRETCH_FRACTION * STRAIGHT_LEN phase-shifts the fraction->position
+## mapping so fraction 0 instead lands most of the way ALONG the front
+## straight: the segment order for increasing fraction becomes [short
+## post-gate run-up][turn1][back straight][turn2][long home stretch]->finish,
+## without changing total lap distance (RaceSim.TRACK_LENGTH/perimeter are
+## untouched) or any other fraction-based system below (grandstand, camera,
+## scenery) — they all read fraction through this same function, so they
+## relocate consistently for free. _build_starting_gate/_make_finish_line/
+## _make_finish_arch are the only three things that DON'T go through
+## fraction/this function (they place a raw Cartesian prop instead) and so
+## each needed their own matching offset — see their own comments.
+const HOME_STRETCH_FRACTION: float = 0.8
+
 func _sample_track(fraction: float, radius: float) -> Dictionary:
 	var half: float = STRAIGHT_LEN * 0.5
 	var turn_len: float = PI * radius
 	var perimeter: float = 2.0 * STRAIGHT_LEN + 2.0 * turn_len
-	var s: float = fposmod(fraction, 1.0) * perimeter
+	var s: float = fposmod(STRAIGHT_LEN * HOME_STRETCH_FRACTION + fposmod(fraction, 1.0) * perimeter, perimeter)
 
 	if s < STRAIGHT_LEN:
 		return {"position": Vector3(-half + s, 0.0, radius)}
@@ -1010,7 +1031,10 @@ static func sample_shape(fraction: float, straight_len: float, inner_radius: flo
 	var radius: float = inner_radius
 	var turn_len: float = PI * radius
 	var perimeter: float = 2.0 * straight_len + 2.0 * turn_len
-	var s: float = fposmod(fraction, 1.0) * perimeter
+	# Same HOME_STRETCH_FRACTION phase shift as _sample_track above — this
+	# has to stay in lock-step with it, or the minimap's dot would drift away
+	# from the real 3D horse position over the course of a race.
+	var s: float = fposmod(straight_len * HOME_STRETCH_FRACTION + fposmod(fraction, 1.0) * perimeter, perimeter)
 
 	if s < straight_len:
 		return Vector2(-half + s, radius)
@@ -1081,7 +1105,9 @@ func _build_starting_gate() -> void:
 	var infield_radius: float = INNER_RADIUS - RAIL_GAP
 	var outer_radius: float = _lane_radius(field.size() - 1) + RAIL_GAP
 	var half: float = STRAIGHT_LEN * 0.5
-	var gate_x: float = -half - GATE_SETBACK - GATE_DEPTH * 0.5
+	# fraction 0 (gate/finish) sits at HOME_STRETCH_FRACTION along the
+	# straight now, not at its very start — see _sample_track's own comment.
+	var gate_x: float = -half + STRAIGHT_LEN * HOME_STRETCH_FRACTION - GATE_SETBACK - GATE_DEPTH * 0.5
 	var span: float = outer_radius - infield_radius
 
 	_gate_root = Node3D.new()
@@ -2311,13 +2337,16 @@ func _make_rail_mesh(points: Array[Vector3], height: float, color: Color, roughn
 ## Checkered finish-line stripe painted across the full width of the dirt
 ## track (infield_radius to outer_radius), at the one point where fraction
 ## 0 and fraction 1 are the same physical spot — races are exactly one lap
-## (see RaceSim.TRACK_LENGTH), so start and finish coincide at the beginning
-## of the front straight (_sample_track(0.0, r) for any radius r). Sits
-## slightly above the dirt ring mesh (y = FINISH_LINE_Y) to avoid z-fighting.
+## (see RaceSim.TRACK_LENGTH), so start and finish coincide, HOME_STRETCH_
+## FRACTION of the way along the front straight (_sample_track(0.0, r) for
+## any radius r — see that function's own comment for why it's not at the
+## straight's start anymore). Sits slightly above the dirt ring mesh
+## (y = FINISH_LINE_Y) to avoid z-fighting.
 func _make_finish_line(infield_radius: float, outer_radius: float) -> MeshInstance3D:
 	var half: float = STRAIGHT_LEN * 0.5
-	var x0: float = -half - FINISH_LINE_WIDTH * 0.5
-	var x1: float = -half + FINISH_LINE_WIDTH * 0.5
+	var finish_x: float = -half + STRAIGHT_LEN * HOME_STRETCH_FRACTION
+	var x0: float = finish_x - FINISH_LINE_WIDTH * 0.5
+	var x1: float = finish_x + FINISH_LINE_WIDTH * 0.5
 	var row_step: float = (x1 - x0) / FINISH_LINE_ROWS
 	var col_step: float = (outer_radius - infield_radius) / FINISH_LINE_COLS
 
@@ -2371,6 +2400,9 @@ const FINISH_ARCH_POST_COLOR: Color = Color(0.82, 0.82, 0.85) # neutral white-me
 ## rail's own emissive glow) rather than the gate's opaque red/white boxes.
 func _make_finish_arch(infield_radius: float, outer_radius: float) -> Node3D:
 	var half: float = STRAIGHT_LEN * 0.5
+	# Same finish_x as _make_finish_line — keep these two in lock-step, they're
+	# the same physical line (a painted stripe plus the overhead wire above it).
+	var finish_x: float = -half + STRAIGHT_LEN * HOME_STRETCH_FRACTION
 	var arch := Node3D.new()
 	arch.name = "FinishArch"
 
@@ -2380,14 +2412,14 @@ func _make_finish_arch(infield_radius: float, outer_radius: float) -> Node3D:
 		post.mesh = BoxMesh.new()
 		post.mesh.size = Vector3(FINISH_ARCH_POST_SIZE, FINISH_ARCH_HEIGHT, FINISH_ARCH_POST_SIZE)
 		post.material_override = post_mat
-		post.position = Vector3(-half, FINISH_ARCH_HEIGHT * 0.5, z)
+		post.position = Vector3(finish_x, FINISH_ARCH_HEIGHT * 0.5, z)
 		arch.add_child(post)
 
 	var wire := MeshInstance3D.new()
 	wire.mesh = BoxMesh.new()
 	wire.mesh.size = Vector3(FINISH_ARCH_WIRE_THICKNESS, FINISH_ARCH_WIRE_THICKNESS, outer_radius - infield_radius + FINISH_ARCH_POST_SIZE)
 	wire.material_override = _make_material(Color.BLACK, 0.4, null, UITheme.COLOR_GOLD, 3.0)
-	wire.position = Vector3(-half, FINISH_ARCH_HEIGHT, infield_radius + (outer_radius - infield_radius) * 0.5)
+	wire.position = Vector3(finish_x, FINISH_ARCH_HEIGHT, infield_radius + (outer_radius - infield_radius) * 0.5)
 	arch.add_child(wire)
 
 	return arch

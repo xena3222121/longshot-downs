@@ -90,18 +90,19 @@ const PHOTO_WIN_CALLS: Array[String] = [
 ## confirmed cause of AJ sometimes hearing nothing at race start (a 1-in-4
 ## chance of landing on a caption-only line every single race).
 ##
-## "Aaaand away they go!" (below) is different from the rest of this array:
-## it's AJ's own recorded voice line (assets/audio/announcer/
-## race_start_away_they_go_MANUAL.mp3, manifest-mapped by hand), not an
-## ElevenLabs render — deliberately NOT added to generate_announcer_audio.py's
-## BANKS, so a future bulk-regeneration run can never compute this same text's
-## hash filename and silently overwrite a real human take with a synthetic
-## one. Keep it that way if this array's text ever changes.
+## A second attempt at "Aaaand away they go!" used AJ's own recorded voice
+## line instead of a manifest clip (assets/audio/announcer/
+## race_start_away_they_go_MANUAL.mp3) — AJ heard it in-game and it "sounds
+## like garbage and out of place" next to the ElevenLabs voice everywhere
+## else, so it's been pulled (file deleted, manifest entry removed). If this
+## phrase comes back, it needs a real ElevenLabs render via
+## generate_announcer_audio.py (add it to this array, then run the generator
+## with the API key/voice ID — see that script's own header) so it actually
+## matches the rest of the broadcast, not a one-off recording spliced in.
 const RACE_START_CALLS: Array[String] = [
 	"And they're off!",
 	"Here we go!",
 	"They break from the gate!",
-	"Aaaand away they go!",
 ]
 ## Running-order filler, said whenever nothing else has come up in a while —
 ## keeps the call constant instead of going quiet between events.
