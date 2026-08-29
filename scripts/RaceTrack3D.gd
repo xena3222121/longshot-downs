@@ -1018,6 +1018,26 @@ func _sample_track(fraction: float, radius: float) -> Dictionary:
 	var theta2: float = -PI * 0.5 - s / radius
 	return {"position": Vector3(-half, 0.0, 0.0) + radius * Vector3(cos(theta2), 0.0, sin(theta2))}
 
+## Converts a fraction tuned by eye BEFORE HOME_STRETCH_FRACTION existed
+## (i.e. against the old mapping where fraction 0 was turn2's exit) into the
+## fraction that lands at that exact same physical spot now. Any fixed
+## fraction constant meant to sit on a SPECIFIC segment (a straight, not
+## whichever turn happens to be there now) needs this — otherwise the same
+## literal fraction can silently land on a totally different segment once
+## HOME_STRETCH_FRACTION shifts the mapping. Concretely what broke: the
+## grandstand/bleachers (GRANDSTAND_FRACTION/BLEACHER_FRACTION, both tuned
+## against the old mapping to sit "well inside" a specific straight) instead
+## landed mid-TURN after that shift — flat, axis-aligned scenery built for a
+## straight doesn't follow a turn's curve, so its footprint swung out across
+## the actual lanes. AJ: "the horses just went right through the freaking
+## stands." Needs the SAME radius the caller passes to _sample_track (the
+## shift amount depends on perimeter, which depends on radius), so this
+## can't be a single constant — it has to be computed per call site.
+func _shifted_fraction(old_fraction: float, radius: float) -> float:
+	var turn_len: float = PI * radius
+	var perimeter: float = 2.0 * STRAIGHT_LEN + 2.0 * turn_len
+	return fposmod(old_fraction - (STRAIGHT_LEN * HOME_STRETCH_FRACTION) / perimeter, 1.0)
+
 ## Same stadium math as _sample_track above, collapsed to a flat 2D (x,z)
 ## point at the inner-rail lane — used by BroadcastHUD's minimap so it draws
 ## the real track's actual shape and winding direction instead of an
@@ -1414,9 +1434,10 @@ func _build_spectators(infield_radius: float) -> void:
 	# overlapping-enough cards spanning that same arc instead of a scatter of
 	# individual points.
 	var cluster_radius: float = infield_radius - 1.2
+	var grandstand_frac: float = _shifted_fraction(GRANDSTAND_FRACTION, cluster_radius)
 	for i in range(CROWD_CARD_COUNT):
 		var t: float = float(i) / float(max(CROWD_CARD_COUNT - 1, 1))
-		var frac: float = GRANDSTAND_FRACTION + lerp(-0.05, 0.05, t)
+		var frac: float = grandstand_frac + lerp(-0.05, 0.05, t)
 		var pos: Vector3 = _sample_track(frac, cluster_radius).position
 		multimesh.set_instance_transform(i, Transform3D(Basis(), pos + Vector3(0.0, CROWD_CARD_HEIGHT * 0.5, 0.0)))
 
@@ -1445,8 +1466,9 @@ func _build_spectators_legacy(infield_radius: float) -> void:
 	# little wider than the stand itself, standing just inside the infield
 	# rail (a believable "crowd pressed up against the rail" read).
 	var cluster_radius: float = infield_radius - 1.2
+	var grandstand_frac: float = _shifted_fraction(GRANDSTAND_FRACTION, cluster_radius)
 	for i in range(SPECTATOR_COUNT):
-		var frac: float = GRANDSTAND_FRACTION + randf_range(-0.045, 0.045)
+		var frac: float = grandstand_frac + randf_range(-0.045, 0.045)
 		var pos: Vector3 = _sample_track(frac, cluster_radius).position
 		pos += Vector3(randf_range(-0.6, 0.6), 0.0, randf_range(-0.6, 0.6))
 		var scale: float = randf_range(0.85, 1.1)
@@ -1482,13 +1504,20 @@ func _build_trees(infield_radius: float) -> void:
 	var max_tree_radius: float = infield_radius - 3.0
 	if max_tree_radius <= 4.0:
 		return
+	# Trees each land at their own random radius (r, below) chosen AFTER this
+	# clearance check, so there's no single exact radius to shift against —
+	## a fuzzy exclusion zone this wide (TREE_CLEAR_FRACTION_HALF_WIDTH=0.09)
+	# doesn't need per-tree precision anyway; shifting against the actual
+	# grandstand/bleacher structure's own radius is representative enough.
+	var grandstand_frac: float = _shifted_fraction(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS)
+	var bleacher_frac: float = _shifted_fraction(BLEACHER_FRACTION, BLEACHER_CENTER_RADIUS)
 	for i in range(TREE_COUNT):
 		var frac: float = float(i) / float(TREE_COUNT) + randf_range(-0.02, 0.02)
-		var dist_from_grandstand: float = abs(fposmod(frac - GRANDSTAND_FRACTION + 0.5, 1.0) - 0.5)
+		var dist_from_grandstand: float = abs(fposmod(frac - grandstand_frac + 0.5, 1.0) - 0.5)
 		if dist_from_grandstand < TREE_CLEAR_FRACTION_HALF_WIDTH:
 			continue # stay clear of the grandstand's footprint
 		if _has_fairgrounds:
-			var dist_from_bleachers: float = abs(fposmod(frac - BLEACHER_FRACTION + 0.5, 1.0) - 0.5)
+			var dist_from_bleachers: float = abs(fposmod(frac - bleacher_frac + 0.5, 1.0) - 0.5)
 			if dist_from_bleachers < TREE_CLEAR_FRACTION_HALF_WIDTH:
 				continue # stay clear of the backstretch bleachers' footprint too, this venue only
 		var r: float = lerp(4.0, max_tree_radius, randf())
@@ -1590,15 +1619,20 @@ func _make_tree(pos: Vector3) -> Node3D:
 
 ## A small stepped-tier grandstand + roof along the home stretch. Built as a
 ## straight-sided box in this node's own local space, so it's only
-## geometrically valid where the track itself is actually straight —
-## GRANDSTAND_FRACTION (0.15) sits well inside the front straight rather
-## than at fraction 0 exactly (the finish line, which is also the corner
-## where the straight meets the first turn): at s = 0.15 * (2*STRAIGHT_LEN
-## + 2*PI*GRANDSTAND_CENTER_RADIUS) ≈ 56 world units along the straight,
-## the stand's full ±(GRANDSTAND_LENGTH/2) ≈ ±17 local-X footprint lands at
-## s ≈ 39 to 73, comfortably inside the straight's own s ∈ [0, STRAIGHT_LEN]
-## range with margin on both sides — right at the corner, the infield
-## boundary starts curving into the turn, which a straight box can't follow.
+## geometrically valid where the track itself is actually straight — this
+## constant is tuned (by the s-math this comment used to describe) to sit
+## well inside the front straight with real margin on both sides, clear of
+## both the finish-line cluster and the turn where a straight box can't
+## follow the curve.
+##
+## MUST be passed through _shifted_fraction(GRANDSTAND_FRACTION, radius)
+## wherever it's used as a _sample_track fraction, never used bare — this
+## literal value was tuned against the OLD (pre-HOME_STRETCH_FRACTION)
+## mapping, where fraction 0 was the finish line at the very start of the
+## straight. HOME_STRETCH_FRACTION moved the finish deep into the straight,
+## and this same literal fraction, unshifted, no longer lands on the straight
+## at all — it lands mid-turn instead (see _shifted_fraction's own comment:
+## this is exactly what put the grandstand through the track).
 const GRANDSTAND_FRACTION: float = 0.15
 const GRANDSTAND_CENTER_RADIUS: float = 15.0
 const GRANDSTAND_LENGTH: float = 34.0
@@ -1630,7 +1664,7 @@ func _build_grandstand_reflection_probe() -> void:
 	var probe := ReflectionProbe.new()
 	probe.update_mode = ReflectionProbe.UPDATE_ONCE
 	probe.size = Vector3(70.0, 26.0, 70.0)
-	probe.position = _sample_track(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS).position \
+	probe.position = _sample_track(_shifted_fraction(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS), GRANDSTAND_CENTER_RADIUS).position \
 		+ Vector3(0.0, GRANDSTAND_TIER_HEIGHT * GRANDSTAND_TIERS * 0.5, 0.0)
 	add_child(probe)
 
@@ -1639,7 +1673,7 @@ func _build_grandstand(infield_radius: float) -> void:
 		return # safety guard in case field size ever shrinks infield_radius below what this needs
 
 	var stand := Node3D.new()
-	var base_pos: Vector3 = _sample_track(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS).position
+	var base_pos: Vector3 = _sample_track(_shifted_fraction(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS), GRANDSTAND_CENTER_RADIUS).position
 	stand.position = base_pos
 	add_child(stand)
 
@@ -1727,7 +1761,11 @@ func _build_grandstand_crowd(stand: Node3D) -> void:
 ## just mirrored to the BACK straight instead of the front one. Simpler than
 ## the grandstand on purpose (3 open tiers, no roof/struts) — real trackside
 ## bleachers vs. the clubhouse-style main grandstand.
-const BLEACHER_FRACTION: float = 0.65 # centered well inside the back straight — see this function's own placement math in the header comment above
+## Centered well inside the back straight. Same caveat as GRANDSTAND_FRACTION
+## above: MUST go through _shifted_fraction(BLEACHER_FRACTION, radius)
+## wherever it's used, never bare — tuned against the pre-HOME_STRETCH_
+## FRACTION mapping.
+const BLEACHER_FRACTION: float = 0.65
 const BLEACHER_CENTER_RADIUS: float = 15.0
 const BLEACHER_LENGTH: float = 26.0
 const BLEACHER_TIERS: int = 3
@@ -1739,7 +1777,7 @@ func _build_backstretch_bleachers(infield_radius: float) -> void:
 		return # same safety guard as _build_grandstand, in case field size ever shrinks infield_radius below what this needs
 
 	var stand := Node3D.new()
-	stand.position = _sample_track(BLEACHER_FRACTION, BLEACHER_CENTER_RADIUS).position
+	stand.position = _sample_track(_shifted_fraction(BLEACHER_FRACTION, BLEACHER_CENTER_RADIUS), BLEACHER_CENTER_RADIUS).position
 	# The back straight runs the opposite winding direction from the front
 	# one (_sample_track's own s-math: x decreases with s here, vs.
 	# increasing on the front straight) — a 180° turn keeps each tier's
@@ -1838,7 +1876,7 @@ const FAIRGROUNDS_RADIUS: float = 7.0
 ## GRANDSTAND_CENTER_RADIUS) and only changing Z/depth, which keeps the two
 ## structures aligned regardless of straight_len.
 func _build_fairgrounds_backdrop() -> void:
-	var grandstand_pos: Vector3 = _sample_track(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS).position
+	var grandstand_pos: Vector3 = _sample_track(_shifted_fraction(GRANDSTAND_FRACTION, GRANDSTAND_CENTER_RADIUS), GRANDSTAND_CENTER_RADIUS).position
 	var base_pos: Vector3 = Vector3(grandstand_pos.x, 0.0, FAIRGROUNDS_RADIUS)
 	add_child(_build_ferris_wheel(base_pos))
 	# Offsets kept OUTSIDE the grandstand's own footprint (half-width
