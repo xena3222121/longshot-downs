@@ -36,11 +36,16 @@ const ATTRIBUTE_LABELS: Dictionary = {
 const POINTS_PER_LEVEL: int = 20
 const MAX_LEVEL: int = 5
 
+## "elite" tier's name is a wink at a real, very famous (and very
+## controversial) trainer — AJ asked for something "similar-ish" to play on,
+## deliberately NOT his actual name for obvious legal reasons. Close enough
+## to land the joke, different enough to be clearly its own fictional
+## character, same as this game already does for its wild-roster horse names.
 const TRAINER_TIERS: Array[Dictionary] = [
 	{"id": "none", "label": "No Trainer (self-train only)", "daily_cost": 0, "gain": 0},
 	{"id": "local", "label": "Local Trainer", "daily_cost": 100, "gain": 4},
 	{"id": "regional", "label": "Regional Trainer", "daily_cost": 300, "gain": 7},
-	{"id": "elite", "label": "Elite Trainer", "daily_cost": 800, "gain": 11},
+	{"id": "elite", "label": "Bob Baffleton (Elite)", "daily_cost": 800, "gain": 11},
 ]
 ## Self-training is the cheaper-per-point path IF you show up every day and
 ## buy the drill yourself; hiring a trainer costs more per point but needs

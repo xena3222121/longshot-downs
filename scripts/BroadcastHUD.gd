@@ -50,10 +50,20 @@ const COUNTDOWN_STEP_FADE: float = 0.15
 ## via a PCM-level check straight off the SFX bus), but AJ heard it and
 ## said flatly it "was not a fucking bugle" — a content-mismatch, not a
 ## playback bug, no amount of ducking/volume fixing was ever going to solve
-## that. post_time_bugle.mp3 runs ~18.2s (it's the "cavalry charge" call
-## played twice); BUGLE_CALL_HOLD sized to that instead of the old ~10s
-## target so it isn't cut off mid-call.
-const BUGLE_CALL_HOLD: float = 19.0
+## that.
+##
+## post_time_bugle.mp3 originally ran ~18.2s and opened with ~2.95s of a
+## spoken library slate (a woman's voice, presumably naming the clip for
+## cataloging) before the actual bugle started — AJ: "there's a woman in the
+## background saying what the mp3 file is called... can we trim that so we
+## only get the instrument sound." Same category of issue as horse_neigh.mp3's
+## baked-in reel-number slate (see project memory) — trimmed the file itself
+## (ffmpeg atrim at the 2.95s mark, confirmed via a spectrogram that the
+## speech's broadband texture is fully gone and the clean harmonic bugle
+## pattern now starts at t=0) rather than trying to duck/mask it in-engine.
+## Now runs ~15.3s; BUGLE_CALL_HOLD shortened to match with the same ~0.8s
+## buffer past the audio's end the original had (19.0 vs the old ~18.2s).
+const BUGLE_CALL_HOLD: float = 16.1
 const BUGLE_CALL_FADE: float = 0.4
 
 ## `play_sfx` itself isn't gated on audio focus — the caller (RaceTrack3D,
