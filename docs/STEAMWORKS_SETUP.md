@@ -40,6 +40,34 @@ upload these in the admin panel next to each achievement above.
 (Source of truth if this list ever drifts: `Career.ACHIEVEMENTS` in
 `scripts/autoload/Career.gd`.)
 
+### 2b. Career mode (owner-mode) milestones — same setup, separate list
+
+Added alongside the Career/owner-mode overhaul (buy/train/race your own
+stable — see the "Career mode" section of `docs/STORE_PAGE_COPY.md`) —
+`CareerStable.gd` unlocks these the exact same way `Career.gd` does
+(`SteamManager.unlock_achievement()`), so they need the same one-time
+server-side setup. **18 total achievements once both lists are created**,
+not 8.
+
+| API Name (enter exactly) | Display Name | Description |
+|---|---|---|
+| `first_win` | Winner's Circle | Win your first career race. |
+| `three_horses` | Growing Stable | Own 3 horses at once. |
+| `allowance_class` | Rising Star | Reach Allowance class with a horse. |
+| `stakes_class` | Stakes Company | Reach Stakes class with a horse. |
+| `grade1_win` | Grade 1 Champion | Win a Grade 1 Stakes race. |
+| `maxed_category` | Specialist | Max out one category on a horse. |
+| `maxed_all_three` | Complete Package | Max out all three categories on one horse. |
+| `blue_blood_owner` | Blue Blood | Own a Blue-Blood Sire Line horse. |
+| `five_wins` | Consistent Winner | Win 5 career races total, across your whole stable. |
+| `big_spender` | Big Spender | Spend $500,000 total buying horses. |
+
+Icon art already exists for all 10 (same generator, same accent-ring style —
+`scripts/tools/generate_achievement_icons.gd`, re-run after these were added).
+
+(Source of truth if this list ever drifts: `CareerStable.MILESTONES` in
+`scripts/autoload/CareerStable.gd`.)
+
 ## 3. Leaderboards — create these exact names
 
 `SteamManager.gd` calls `findLeaderboard()`/`uploadLeaderboardScore()` against

@@ -7,10 +7,10 @@ extends SceneTree
 ## visual language instead of generic clip art — Steamworks requires icon
 ## uploads per achievement and none existed at all before this (see
 ## docs/STEAMWORKS_SETUP.md's own note on the gap). Ids are hardcoded here
-## rather than read from Career.ACHIEVEMENTS since that's an autoload only
-## available in a real scene tree (--path . alone, without a .tscn, doesn't
-## instantiate autoloads) — keep this list in sync with Career.ACHIEVEMENTS
-## by hand if achievements ever change.
+## rather than read from Career.ACHIEVEMENTS/CareerStable.MILESTONES since
+## those are autoloads only available in a real scene tree (--path . alone,
+## without a .tscn, doesn't instantiate autoloads) — keep this list in sync
+## with BOTH by hand if achievements ever change on either side.
 ##
 ## Pure Image pixel drawing, not a rendered Control/SubViewport — avoids any
 ## dependency on font/theme rendering actually working correctly in a
@@ -35,6 +35,20 @@ const ACCENTS: Dictionary = {
 	"photo_finish_fan": Color(0.2, 0.7, 0.95),
 	"millionaire": Color(1.0, 0.84, 0.2),
 	"century_club": Color(0.3, 0.85, 0.45),
+	# CareerStable.MILESTONES (owner-mode career achievements) — added same
+	# session as the career mode overhaul, kept in this same generator/style
+	# rather than a separate tool so every Steam achievement icon in the game
+	# looks like one consistent set.
+	"first_win": Color(0.85, 0.25, 0.55),
+	"three_horses": Color(0.35, 0.65, 0.9),
+	"allowance_class": Color(0.55, 0.75, 0.25),
+	"stakes_class": Color(0.2, 0.55, 0.35),
+	"grade1_win": Color(0.95, 0.75, 0.1),
+	"maxed_category": Color(0.75, 0.4, 0.15),
+	"maxed_all_three": Color(0.9, 0.15, 0.15),
+	"blue_blood_owner": Color(0.45, 0.4, 0.85),
+	"five_wins": Color(0.15, 0.75, 0.75),
+	"big_spender": Color(0.85, 0.8, 0.2),
 }
 
 const BG_COLOR: Color = Color(0.043, 0.067, 0.106, 1.0)

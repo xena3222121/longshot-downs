@@ -352,6 +352,7 @@ func _try_unlock_milestone(id: String, newly_unlocked: Array[String]) -> void:
 	milestones_unlocked[id] = true
 	newly_unlocked.append(id)
 	_save()
+	SteamManager.unlock_achievement(id) # see docs/STEAMWORKS_SETUP.md — needs these 10 API names created server-side, same as Career.gd's own achievements
 
 ## No eager _load() here anymore — current_slot starts unset (-1) until
 ## CareerHub's slot-picker screen actually chooses or starts one (see
