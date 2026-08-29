@@ -171,7 +171,7 @@ func _on_starter_picked(index: int) -> void:
 ## ---- Main hub ----
 
 func _build_hub() -> void:
-	_add_heading("Your Stable")
+	_add_heading("Your Career")
 
 	for id in CareerStable.get_owned_horse_ids():
 		_content.add_child(_build_horse_card(id))

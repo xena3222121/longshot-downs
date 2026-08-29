@@ -14,7 +14,7 @@ signal balance_changed(new_balance: int)
 ## UI/dialog, same separation as balance_changed.
 signal went_broke
 
-const STARTING_BALANCE: int = 1000000
+const STARTING_BALANCE: int = 100000
 
 ## Resolved once in _ready() (SavePaths reads OS.get_environment, which isn't
 ## a compile-time constant) rather than being a const.

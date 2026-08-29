@@ -27,8 +27,12 @@ signal bet_placed(picks: Array[int], amount: int, bet_type: OddsTable.BetType)
 signal daily_double_second_race_needed
 
 ## AJ: "bump up the min bet amounts to 10k as the min and so on up from
-## there" — was [100, 1000, 5000, 10000, 25000, 50000, 100000, 1000000].
-const BET_LEVELS: Array[int] = [10000, 25000, 50000, 100000, 250000, 500000, 1000000]
+## there" (was [100, 1000, 5000, 10000, 25000, 50000, 100000, 1000000]), then
+## later: "drop down the lowest bid amount to a thousand dollars, not ten
+## thousand" — added 1000 back as a new floor under the existing ladder
+## rather than replacing 10000 with it, so every level AJ already tuned above
+## stays exactly as-is.
+const BET_LEVELS: Array[int] = [1000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000]
 
 var field: Array[Horse] = []
 var tiers: Array[Dictionary] = []

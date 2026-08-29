@@ -105,7 +105,7 @@ func _build() -> void:
 	secondary_spacer.custom_minimum_size = Vector2(0.0, 8.0)
 	menu.add_child(secondary_spacer)
 
-	for entry in [["Stable", _show_stable], ["Settings", _show_settings], ["Credits", _show_credits]]:
+	for entry in [["Career Mode", _show_stable], ["Settings", _show_settings], ["Credits", _show_credits]]:
 		var nav_btn := Button.new()
 		nav_btn.text = entry[0]
 		nav_btn.theme_type_variation = "GhostButton"
@@ -357,11 +357,13 @@ func _add_track_theme_picker(parent: Control) -> void:
 	option.item_selected.connect(func(index: int): Settings.set_track_theme_id(TrackThemes.THEME_IDS[index]))
 	row.add_child(option)
 
-## "Stable" now leads to the actual Career/owner mode (CareerHub.gd) — buy/
-## train/race your own horse — rather than the old read-only achievements
-## dialog (that summary text still exists, relocated into CareerHub's own
-## _achievements_summary_text, reachable there via its own "Career
-## Achievements" button).
+## "Career Mode" (label changed from "Stable" — AJ: "calling career mode
+## stable is kinda stupid... make it something that actually insinuates
+## that it's a freaking career mode") leads to the actual Career/owner mode
+## (CareerHub.gd) — buy/train/race your own horse — rather than the old
+## read-only achievements dialog (that summary text still exists, relocated
+## into CareerHub's own _achievements_summary_text, reachable there via its
+## own "Career Achievements" button).
 func _show_stable() -> void:
 	await ScreenFade.fade_out()
 	get_tree().change_scene_to_file("res://scenes/CareerHub.tscn")
