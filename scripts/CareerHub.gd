@@ -566,6 +566,12 @@ func _show_achievements_dialog() -> void:
 
 func _achievements_summary_text() -> String:
 	var lines: PackedStringArray = []
+	lines.append("Career Milestones (%d/%d):" % [CareerStable.milestones_unlocked.size(), CareerStable.MILESTONES.size()])
+	for id in CareerStable.MILESTONES.keys():
+		var unlocked: bool = CareerStable.milestones_unlocked.has(id)
+		var mark: String = "✓" if unlocked else "-"
+		lines.append("  %s %s — %s" % [mark, CareerStable.milestone_name(id), CareerStable.MILESTONES[id].description])
+	lines.append("")
 	lines.append("Class: %s" % Career.get_current_class().name)
 	lines.append("Races run: %d" % Career.total_races)
 	lines.append("Current win streak: %d    Best streak: %d" % [Career.current_streak, Career.best_streak])
@@ -631,9 +637,13 @@ func _on_race_finished(stable_horse_id: int, race_class: Dictionary, result: Rac
 	var purse_before: int = Bankroll.balance
 	CareerStable.pay_purse(stable_horse_id, placement, int(race_class.purse))
 	var earned: int = Bankroll.balance - purse_before
-	_show_race_result(placement, earned, String(race_class.name))
+	# "" (not the class id) whenever placement isn't 1st — check_milestones only
+	# credits grade1_win for an ACTUAL win, not just racing in Grade 1 class.
+	var just_won_class_id: String = String(race_class.id) if placement == 1 else ""
+	var newly_unlocked: Array[String] = CareerStable.check_milestones(just_won_class_id)
+	_show_race_result(placement, earned, String(race_class.name), newly_unlocked)
 
-func _show_race_result(placement: int, earned: int, class_name_text: String) -> void:
+func _show_race_result(placement: int, earned: int, class_name_text: String, newly_unlocked_milestones: Array[String] = []) -> void:
 	_clear_view()
 
 	var center := CenterContainer.new()
@@ -679,6 +689,32 @@ func _show_race_result(placement: int, earned: int, class_name_text: String) -> 
 	col.add_child(continue_btn)
 	UITheme.add_button_juice(continue_btn)
 	continue_btn.grab_focus.call_deferred()
+
+	_show_milestone_toasts(newly_unlocked_milestones)
+
+## Small stacked "🏆 Milestone Unlocked" badges in the top-right corner — same
+## fade-Tween idiom FinishPodium._show_achievement_toasts already uses for
+## the wild-field achievement toasts, kept separate since these are
+## CareerStable milestones (per-slot), not Career.gd's global ones.
+func _show_milestone_toasts(ids: Array[String]) -> void:
+	for i in range(ids.size()):
+		var label := Label.new()
+		label.text = "🏆 Milestone Unlocked: %s" % CareerStable.milestone_name(ids[i])
+		label.add_theme_font_size_override("font_size", 18)
+		label.add_theme_color_override("font_color", UITheme.COLOR_GOLD_BRIGHT)
+		label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.7))
+		label.add_theme_constant_override("outline_size", 4)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		label.anchor_left = 1.0
+		label.anchor_right = 1.0
+		label.offset_left = -400.0
+		label.offset_right = -20.0
+		label.position.y = 20.0 + i * 32.0
+		label.modulate.a = 0.0
+		_view_root.add_child(label)
+		var tween: Tween = create_tween()
+		tween.tween_interval(0.3 + 0.25 * i)
+		tween.tween_property(label, "modulate:a", 1.0, 0.4)
 
 func _ordinal(n: int) -> String:
 	match n:

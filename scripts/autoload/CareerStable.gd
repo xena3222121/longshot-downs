@@ -74,6 +74,7 @@ func start_new_career(slot: int) -> void:
 	owned_horses = {}
 	_next_id = ID_START
 	_has_picked_starter = false
+	milestones_unlocked = {}
 
 ## Permanently deletes a slot's save file — destructive, only ever called
 ## from a confirmation dialog (see CareerHub._build_slot_picker).
@@ -253,6 +254,104 @@ var _next_id: int = ID_START
 ## pattern as Bankroll.autosave_enabled — so a headless test run never
 ## overwrites the player's real save file on disk.
 var autosave_enabled: bool = true
+
+## Career-mode-specific milestones — separate from Career.gd's own
+## achievement set (which only tracks WILD-FIELD betting stats, nothing
+## about an owned stable at all). AJ asked to make career mode "deeper" —
+## these are real goals to chase beyond just training/racing on repeat.
+## Per-SLOT (part of this slot's own save data), same as everything else
+## about a career — a fresh slot starts every milestone locked again.
+const MILESTONES: Dictionary = {
+	"first_win": {"name": "Winner's Circle", "description": "Win your first career race."},
+	"three_horses": {"name": "Growing Stable", "description": "Own 3 horses at once."},
+	"allowance_class": {"name": "Rising Star", "description": "Reach Allowance class with a horse."},
+	"stakes_class": {"name": "Stakes Company", "description": "Reach Stakes class with a horse."},
+	"grade1_win": {"name": "Grade 1 Champion", "description": "Win a Grade 1 Stakes race."},
+	"maxed_category": {"name": "Specialist", "description": "Max out one category on a horse."},
+	"maxed_all_three": {"name": "Complete Package", "description": "Max out all three categories on one horse."},
+	"blue_blood_owner": {"name": "Blue Blood", "description": "Own a Blue-Blood Sire Line horse."},
+	"five_wins": {"name": "Consistent Winner", "description": "Win 5 career races total, across your whole stable."},
+	"big_spender": {"name": "Big Spender", "description": "Spend $500,000 total buying horses."},
+}
+var milestones_unlocked: Dictionary = {}
+
+func milestone_name(id: String) -> String:
+	return String(MILESTONES.get(id, {}).get("name", id))
+
+## Scans current stable state for every scannable milestone condition (no
+## redundant counters kept — everything here is derived from owned_horses,
+## same "never store what you can compute" preference the rest of this file
+## already follows for attribute levels). `just_won_race_class_id` covers the
+## one milestone that ISN'T scannable from current state after the fact
+## (class only ever goes up, so "currently Grade 1" doesn't prove a Grade 1
+## race was ever actually WON) — pass the race's own class id when placement
+## was 1st, "" otherwise. Returns newly-unlocked milestone ids for the caller
+## to toast (see CareerHub._show_milestone_toasts).
+func check_milestones(just_won_race_class_id: String = "") -> Array[String]:
+	var newly_unlocked: Array[String] = []
+	var ids: Array[int] = get_owned_horse_ids()
+
+	if ids.size() >= 3:
+		_try_unlock_milestone("three_horses", newly_unlocked)
+	if just_won_race_class_id == "grade1":
+		_try_unlock_milestone("grade1_win", newly_unlocked)
+
+	var total_wins: int = 0
+	var total_spent: int = 0
+	var any_first_win: bool = false
+	var any_allowance: bool = false
+	var any_stakes: bool = false
+	var any_blue_blood: bool = false
+	var any_maxed_one: bool = false
+	var any_maxed_all: bool = false
+	for id in ids:
+		var horse: Dictionary = get_owned_horse(id)
+		total_wins += int(horse.get("career_wins", 0))
+		total_spent += int(horse.get("purchase_price", 0))
+		if int(horse.get("career_wins", 0)) >= 1:
+			any_first_win = true
+		if String(horse.get("origin_id", "")) == "blue_blood":
+			any_blue_blood = true
+		var horse_class_id: String = String(get_horse_class(id).id)
+		if horse_class_id == "allowance" or horse_class_id == "stakes" or horse_class_id == "grade1":
+			any_allowance = true
+		if horse_class_id == "stakes" or horse_class_id == "grade1":
+			any_stakes = true
+		var cap: int = get_potential_cap(id)
+		var maxed_count: int = 0
+		for category_id in CATEGORY_IDS:
+			if get_category_level(id, category_id) >= cap:
+				maxed_count += 1
+		if maxed_count >= 1:
+			any_maxed_one = true
+		if maxed_count >= CATEGORY_IDS.size():
+			any_maxed_all = true
+
+	if any_first_win:
+		_try_unlock_milestone("first_win", newly_unlocked)
+	if total_wins >= 5:
+		_try_unlock_milestone("five_wins", newly_unlocked)
+	if total_spent >= 500000:
+		_try_unlock_milestone("big_spender", newly_unlocked)
+	if any_allowance:
+		_try_unlock_milestone("allowance_class", newly_unlocked)
+	if any_stakes:
+		_try_unlock_milestone("stakes_class", newly_unlocked)
+	if any_blue_blood:
+		_try_unlock_milestone("blue_blood_owner", newly_unlocked)
+	if any_maxed_one:
+		_try_unlock_milestone("maxed_category", newly_unlocked)
+	if any_maxed_all:
+		_try_unlock_milestone("maxed_all_three", newly_unlocked)
+
+	return newly_unlocked
+
+func _try_unlock_milestone(id: String, newly_unlocked: Array[String]) -> void:
+	if milestones_unlocked.has(id):
+		return
+	milestones_unlocked[id] = true
+	newly_unlocked.append(id)
+	_save()
 
 ## No eager _load() here anymore — current_slot starts unset (-1) until
 ## CareerHub's slot-picker screen actually chooses or starts one (see
@@ -528,6 +627,7 @@ func _load() -> void:
 	owned_horses = data.get("owned_horses", {})
 	_next_id = int(data.get("next_id", ID_START))
 	_has_picked_starter = bool(data.get("has_picked_starter", false))
+	milestones_unlocked = data.get("milestones_unlocked", {})
 
 func _save() -> void:
 	if not autosave_enabled or current_slot == -1:
@@ -539,4 +639,5 @@ func _save() -> void:
 		"owned_horses": owned_horses,
 		"next_id": _next_id,
 		"has_picked_starter": _has_picked_starter,
+		"milestones_unlocked": milestones_unlocked,
 	}))
